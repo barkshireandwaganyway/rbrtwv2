@@ -10,14 +10,14 @@ exports.handler = async (event) => {
   try {
     const q = event.queryStringParameters || {};
     const op = q.op || 'status';
-    const key = process.env.OPENWEATHER_API_KEY;
+    const key = process.env.OPENWEATHER_API_KEY || process.env.OPENWEATHER_APPID || process.env.OPENWEATHER_KEY;
 
     if (op === 'status') {
-      if (!key) return json(500, {ready:false, error:'Missing OPENWEATHER_API_KEY Netlify environment variable.'});
+      if (!key) return json(500, {ready:false, error:'Missing OpenWeather Netlify environment variable. Use OPENWEATHER_API_KEY, OPENWEATHER_APPID, or OPENWEATHER_KEY.'});
       return json(200, {ready:true, layers:[...TILE_LAYERS]});
     }
 
-    if (!key) return json(500, {error:'Missing OPENWEATHER_API_KEY Netlify environment variable.'});
+    if (!key) return json(500, {error:'Missing OpenWeather Netlify environment variable. Use OPENWEATHER_API_KEY, OPENWEATHER_APPID, or OPENWEATHER_KEY.'});
 
     if (op === 'tile') {
       const layer = cleanLayer(q.layer);
