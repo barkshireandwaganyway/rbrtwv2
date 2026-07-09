@@ -14,7 +14,15 @@ exports.handler = async (event) => {
     if (!service) return json(400, {error: 'Unknown service key', allowed: Object.keys(SERVICES)});
 
     if (op === 'metadata') {
-      const url = `${service}?f=pjson`;
+      const params = new URLSearchParams({f:'pjson'});
+      if (q.returnUpdates === 'true') params.set('returnUpdates', 'true');
+      const url = `${service}?${params.toString()}`;
+      const data = await fetchJson(url);
+      return json(200, data);
+    }
+
+    if (op === 'layers') {
+      const url = `${service}/layers?f=pjson`;
       const data = await fetchJson(url);
       return json(200, data);
     }
@@ -36,7 +44,7 @@ exports.handler = async (event) => {
       f: 'image',
       bbox,
       bboxSR: '4326',
-      imageSR: /^\d+$/.test(q.imageSR || '') ? q.imageSR : '3857',
+      imageSR: /^\d+$/.test(q.imageSR || '') ? q.imageSR : '4326',
       size,
       format,
       transparent: String(transparent)
