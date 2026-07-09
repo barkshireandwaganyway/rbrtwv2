@@ -46,6 +46,15 @@ exports.handler = async (event) => {
       };
     }
 
+
+    if (op === 'weather') {
+      const lat = cleanCoord(q.lat, 'lat', -90, 90);
+      const lon = cleanCoord(q.lon, 'lon', -180, 180);
+      const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=imperial&appid=${encodeURIComponent(key)}`;
+      const data = await fetchJson(url);
+      return json(200, data);
+    }
+
     if (op === 'air') {
       const lat = cleanCoord(q.lat, 'lat', -90, 90);
       const lon = cleanCoord(q.lon, 'lon', -180, 180);
@@ -54,7 +63,7 @@ exports.handler = async (event) => {
       return json(200, data);
     }
 
-    return json(400, {error:'Unsupported op. Use op=status, op=tile, or op=air.'});
+    return json(400, {error:'Unsupported op. Use op=status, op=tile, op=weather, or op=air.'});
   } catch (err) {
     return json(500, {error: err.message});
   }
