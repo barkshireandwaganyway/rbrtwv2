@@ -36,7 +36,7 @@ exports.handler = async (event) => {
       f: 'image',
       bbox,
       bboxSR: '4326',
-      imageSR: '4326',
+      imageSR: /^\d+$/.test(q.imageSR || '') ? q.imageSR : '3857',
       size,
       format,
       transparent: String(transparent)
