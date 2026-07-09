@@ -9,6 +9,13 @@ exports.handler = async (event) => {
   try {
     const q = event.queryStringParameters || {};
     const op = q.op || 'export';
+
+    if (op === 'counties') {
+      const url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/13/query?where=STATE%3D%2748%27&outFields=NAME%2CBASENAME%2CGEOID%2CSTATE%2CCOUNTY&returnGeometry=true&outSR=4326&f=geojson";
+      const data = await fetchJson(url);
+      return json(200, data, 3600);
+    }
+
     const serviceKey = q.service;
     const service = SERVICES[serviceKey];
     if (!service) return json(400, {error: 'Unknown service key', allowed: Object.keys(SERVICES)});
@@ -104,10 +111,10 @@ async function fetchJson(url){
   return JSON.parse(text);
 }
 
-function json(statusCode, payload){
+function json(statusCode, payload, maxAge=0){
   return {
     statusCode,
-    headers: {'Content-Type':'application/json','Access-Control-Allow-Origin':'*','Cache-Control':'no-store'},
+    headers: {'Content-Type':'application/json','Access-Control-Allow-Origin':'*','Cache-Control': maxAge ? `public, max-age=${maxAge}` : 'no-store'},
     body: JSON.stringify(payload)
   };
 }
