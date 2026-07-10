@@ -11,9 +11,26 @@ exports.handler = async (event) => {
     const op = q.op || 'export';
 
     if (op === 'counties') {
-      const url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/13/query?where=STATE%3D%2748%27&outFields=NAME%2CBASENAME%2CGEOID%2CSTATE%2CCOUNTY&returnGeometry=true&outSR=4326&f=geojson";
+      const bbox = cleanBbox(q.bbox || '-106.650000,25.500000,-93.200000,36.800000');
+      const params = new URLSearchParams({
+        where: "STATE='48'",
+        outFields: 'NAME,BASENAME,GEOID,STATE,COUNTY',
+        returnGeometry: 'true',
+        returnTrueCurves: 'false',
+        outSR: '4326',
+        f: 'geojson',
+        geometry: bbox,
+        geometryType: 'esriGeometryEnvelope',
+        inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects',
+        geometryPrecision: '3',
+        maxAllowableOffset: '0.012',
+        resultRecordCount: '2000',
+        returnExceededLimitFeatures: 'false'
+      });
+      const url = `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/13/query?${params.toString()}`;
       const data = await fetchJson(url);
-      return json(200, data, 3600);
+      return json(200, data, 1800);
     }
 
     const serviceKey = q.service;
