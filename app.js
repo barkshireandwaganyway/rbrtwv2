@@ -1,0 +1,1690 @@
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
+
+const RBRTW_BOUNDS = [-101.5, 27.5, -96.5, 31.0];
+const MAP_SIZE = [1868, 902];
+
+const OPENFREE_BASEMAPS = {
+  liberty: 'https://tiles.openfreemap.org/styles/liberty',
+  positron: 'https://tiles.openfreemap.org/styles/positron',
+  bright: 'https://tiles.openfreemap.org/styles/bright',
+  dark: 'https://tiles.openfreemap.org/styles/dark',
+  fiord: 'https://tiles.openfreemap.org/styles/fiord'
+};
+
+const ARCGIS_BASEMAP_STYLES_URL = 'https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/styles';
+const ARCGIS_DEFAULT_TOKEN = 'AAPTa5fKHHbx5u9YdJo296QPUbw..6tPG3orHzsPUzCPEd5HpGTFROv8vKAdnT93iWpgHXW0-XWayU1v-zrH2KqcMejvWFwzlvL6gg7CCR2lDs3paP_f524qbsu-XG0zaoZTV9zRwmqy4lPU_H3Z_ps7lLtf47MJDU2_eMSR2mMpEMhyS5py6E7xuaW1u1oPBC5094TpLFuTPp3wLsNtXd116UGrgDNLnpYOZ4UWgjXcDUBjWmgtdIHlHVdlOcV65bOsRDUzVY5sXIKK-di0dAT1_MG69CTAm';
+
+const BLANK_STYLE = {
+  version: 8,
+  sources: {},
+  layers: [{id:'background', type:'background', paint:{'background-color':'#07101f'}}]
+};
+
+const TEXAS_COUNTIES_GEOJSON_EMPTY = {type:"FeatureCollection", features:[]};
+
+const DEFAULT_LEGENDS = {
+  radar: {title:'RADAR REFLECTIVITY', rows:[['#55e455','Light'],['#f8f158','Moderate'],['#ff8e25','Heavy'],['#ff2a2a','Very heavy'],['#d22bff','Extreme']]},
+  clouds: {title:'CLOUD COVER', rows:[['#d7dde6','Lower'],['#adb7c4','Scattered'],['#7f8c99','Broken'],['#525d69','Overcast']]},
+  owPrecip: {title:'PRECIPITATION', rows:[['#59c7ff','Light'],['#5be25b','Steady'],['#ffd84a','Moderate'],['#ff832d','Heavy'],['#c71328','Intense']]},
+  pressure: {title:'PRESSURE', rows:[['#375cff','Lower'],['#41c7ff','Below avg'],['#f3f0a2','Average'],['#f0873f','Higher'],['#d63232','High']]},
+  wind: {title:'WIND', rows:[['#8fe6ff','Light'],['#5cf06b','Breezy'],['#fff04d','Windy'],['#ff8e25','Strong'],['#d22bff','Severe']]},
+  temp: {title:'TEMPERATURE', rows:[['#59c7ff','Cooler'],['#5be25b','Mild'],['#ffd84a','Warm'],['#ff832d','Hot'],['#c71328','Very Hot']]},
+  heat: {title:'APPARENT TEMP', rows:[['#7cecff','Lower risk'],['#5bf06b','Hot'],['#fff04d','Dangerous'],['#ff7d2d','High'],['#cc1a82','Extreme']]},
+  humidity: {title:'RELATIVE HUMIDITY', rows:[['#e7d7a5','Dry'],['#95df88','Comfortable'],['#28c76f','Humid'],['#109b63','Very Humid'],['#08603f','Oppressive']]},
+  spc: {title:'SPC OUTLOOK', rows:[['#58c65d','Marginal'],['#f2ef54','Slight'],['#f79a2a','Enhanced'],['#e85c61','Moderate'],['#d84fd6','High']]},
+  spcProb: {title:'SPC PROBABILITY', rows:[['#58c65d','Low'],['#f2ef54','Moderate'],['#ff8e25','Elevated'],['#ff2a2a','High'],['#d22bff','Extreme']]},
+  wpc: {title:'WPC FORECAST CHART', rows:[['#1d56ff','Cold front'],['#e73333','Warm front'],['#a94cff','Occluded'],['#1fcf57','Rain / storms'],['#ffffff','Winter areas']]},
+  alerts: {title:'NWS ALERTS', rows:[['#ff00ff','Extreme'],['#ff2222','Severe'],['#ff9d00','Moderate'],['#ffe23a','Minor'],['#00d2ff','Other']]}
+};
+let legendConfig = JSON.parse(JSON.stringify(DEFAULT_LEGENDS));
+
+const PRODUCTS = {
+  radar: {
+    title: 'CLOUDS + RADAR SNAPSHOT', subtitle:'', service:'radarTile', radarSource:'iem', sourceLabel:'IEM NEXRAD tiled radar mosaic',
+    key:'radar', dayEnabled:false, hourEnabled:false
+  },
+  radarNowcoast: {
+    title: 'NOAA NOWCOAST RADAR', subtitle:'', service:'wmsTile', wmsSource:'nowcoast', sourceLabel:'NOAA nowCOAST Weather Radar Base Reflectivity WMS',
+    key:'radar', dayEnabled:false, hourEnabled:false
+  },
+  radarNoaaTime: {
+    title: 'NOAA RADAR TIME MOSAIC', subtitle:'', service:'wmsTile', wmsSource:'noaaTime', sourceLabel:'NOAA radar_base_reflectivity_time ImageServer WMS',
+    key:'radar', dayEnabled:false, hourEnabled:false
+  },
+  radarMrmsTile: {
+    title: 'SERVER MRMS RADAR TILE', subtitle:'', service:'wmsTile', wmsSource:'mrmsArcgis', sourceLabel:'Server-proxied NOAA MRMS MapServer tile export',
+    key:'radar', dayEnabled:false, hourEnabled:false
+  },
+  radarMrmsExport: {
+    title: 'MRMS RADAR EXPORT FALLBACK', subtitle:'', service:'radar', layers:'show:3', sourceLabel:'NOAA MRMS MapServer export fallback',
+    key:'radar', dayEnabled:false, hourEnabled:false
+  },
+  owClouds: {
+    title: 'CLOUD COVER', subtitle:'', service:'openweatherTile', openWeatherLayer:'clouds_new', sourceLabel:'OpenWeather cloud map tiles via secure Netlify function',
+    key:'clouds', dayEnabled:false, hourEnabled:false
+  },
+  owPrecip: {
+    title: 'PRECIPITATION MAP', subtitle:'', service:'openweatherTile', openWeatherLayer:'precipitation_new', sourceLabel:'OpenWeather precipitation map tiles via secure Netlify function',
+    key:'owPrecip', dayEnabled:false, hourEnabled:false
+  },
+  owTemp: {
+    title: 'TEMPERATURE MAP', subtitle:'', service:'openweatherTile', openWeatherLayer:'temp_new', sourceLabel:'OpenWeather temperature map tiles via secure Netlify function',
+    key:'temp', dayEnabled:false, hourEnabled:false
+  },
+  owHeat: {
+    title: 'FEELS LIKE / HEAT INDEX', subtitle:'', service:'openweatherTile', openWeatherLayer:'temp_new', sourceLabel:'OpenWeather temperature tiles and current feels-like values via secure Netlify function',
+    key:'heat', dayEnabled:false, hourEnabled:false
+  },
+  owPressure: {
+    title: 'SURFACE PRESSURE', subtitle:'', service:'openweatherTile', openWeatherLayer:'pressure_new', sourceLabel:'OpenWeather pressure map tiles via secure Netlify function',
+    key:'pressure', dayEnabled:false, hourEnabled:false
+  },
+  owWind: {
+    title: 'WIND MAP', subtitle:'', service:'openweatherTile', openWeatherLayer:'wind_new', sourceLabel:'OpenWeather wind map tiles via secure Netlify function',
+    key:'wind', dayEnabled:false, hourEnabled:false
+  },
+  temp: {
+    title: 'TEMPERATURES', subtitle:'', service:'ndfdTemp', layersByHour:{0:'show:4','00':'show:8','03':'show:12','06':'show:16','09':'show:20','12':'show:24','15':'show:28','18':'show:32','21':'show:36','24':'show:40'}, sourceLabel:'NOAA NDFD temperature image layer', key:'temp', dayEnabled:false, hourEnabled:true
+  },
+  heat: {
+    title: 'HEAT INDEX', subtitle:'', service:'ndfdTemp', layersByHour:{0:'show:45','00':'show:49','03':'show:53','06':'show:57','09':'show:61','12':'show:65','15':'show:69','18':'show:73','21':'show:77','24':'show:81'}, sourceLabel:'NOAA NDFD apparent temperature image layer', key:'heat', dayEnabled:false, hourEnabled:true
+  },
+  humidity: {
+    title: 'RELATIVE HUMIDITY', subtitle:'', service:'ndfdTemp', layersByHour:{0:'show:86','00':'show:90','03':'show:94','06':'show:98','09':'show:102','12':'show:106','15':'show:110','18':'show:114','21':'show:118','24':'show:122'}, sourceLabel:'NOAA NDFD relative humidity image layer', key:'humidity', dayEnabled:false, hourEnabled:true
+  },
+  maxTemp: {
+    title: 'FORECAST HIGHS', subtitle:'', service:'ndfdTemp', layers:'show:127', sourceLabel:'NOAA NDFD max temperature Day 1 image layer', key:'temp', dayEnabled:false, hourEnabled:false
+  },
+  minTemp: {
+    title: 'FORECAST LOWS', subtitle:'', service:'ndfdTemp', layers:'show:140', sourceLabel:'NOAA NDFD min temperature Day 1 image layer', key:'temp', dayEnabled:false, hourEnabled:false
+  },
+  spcCat: { title:'SEVERE STORM OUTLOOK', subtitle:'', service:'spc', spcKind:'cat', sourceLabel:'NOAA/SPC categorical outlook layer', key:'spc', dayEnabled:true, hourEnabled:false },
+  spcTor: { title:'TORNADO OUTLOOK', subtitle:'', service:'spc', spcKind:'tor', sourceLabel:'NOAA/SPC tornado probability layer', key:'spcProb', dayEnabled:true, hourEnabled:false },
+  spcHail: { title:'HAIL OUTLOOK', subtitle:'', service:'spc', spcKind:'hail', sourceLabel:'NOAA/SPC hail probability layer', key:'spcProb', dayEnabled:true, hourEnabled:false },
+  spcWind: { title:'DAMAGING WIND OUTLOOK', subtitle:'', service:'spc', spcKind:'wind', sourceLabel:'NOAA/SPC damaging wind probability layer', key:'spcProb', dayEnabled:true, hourEnabled:false },
+  wpcChart: { title:'SURFACE FRONTS + WEATHER', subtitle:'', service:'wpc', sourceLabel:'NOAA/WPC national forecast chart layers', key:'wpc', dayEnabled:true, hourEnabled:false },
+  alerts: { title:'ACTIVE NWS ALERTS', subtitle:'', service:'nwsAlerts', sourceLabel:'NWS active alerts GeoJSON API', key:'alerts', dayEnabled:false, hourEnabled:false }
+};
+
+const SPC_LAYERS = {
+  cat: {1:'show:1', 2:'show:9', 3:'show:17', 4:'show:21', 5:'show:22', 6:'show:23', 7:'show:24', 8:'show:25'},
+  tor: {1:'show:3', 2:'show:11'},
+  hail:{1:'show:5', 2:'show:13'},
+  wind:{1:'show:7', 2:'show:15'}
+};
+
+const WPC_LAYERS = {
+  1:'show:1,2,3,4,5,6,7,8,9,10,11',
+  2:'show:13,14,15,16,17,18,19,20,21,22,23',
+  3:'show:25,26,27,28,29,30,31,32,33,34,35'
+};
+
+
+const TEXAS_CITIES = [
+  ['San Antonio',29.424,-98.494,1],['Austin',30.267,-97.743,1],['Dallas',32.776,-96.797,1],['Fort Worth',32.755,-97.330,1],['Houston',29.760,-95.369,1],['Corpus Christi',27.801,-97.397,1],['Laredo',27.506,-99.507,1],['Del Rio',29.370,-100.896,1],['San Angelo',31.464,-100.437,1],['Amarillo',35.222,-101.831,1],['Lubbock',33.577,-101.855,1],['Wichita Falls',33.913,-98.493,1],['El Paso',31.761,-106.485,1],['Waco',31.549,-97.147,2],['College Station',30.628,-96.334,2],['Victoria',28.805,-97.004,2],['Brownsville',25.901,-97.497,2],['McAllen',26.204,-98.230,2],['Midland',31.997,-102.078,2],['Odessa',31.845,-102.367,2],['Abilene',32.448,-99.733,2],['Killeen',31.117,-97.727,2],['Tyler',32.351,-95.301,2],['Longview',32.500,-94.740,2],['Beaumont',30.080,-94.126,2],['Galveston',29.301,-94.797,2],['Texarkana',33.425,-94.047,2],['Denton',33.214,-97.133,2],['New Braunfels',29.704,-98.124,2],['San Marcos',29.884,-97.941,2],['Seguin',29.568,-97.965,2],['Boerne',29.795,-98.732,3],['Hondo',29.347,-99.141,3],['Uvalde',29.209,-99.786,3],['Eagle Pass',28.709,-100.499,3],['Cotulla',28.436,-99.236,3],['Carrizo Springs',28.522,-99.860,3],['Pleasanton',28.967,-98.478,3],['Beeville',28.401,-97.748,3],['Alice',27.752,-98.070,3],['Kingsville',27.516,-97.856,3],['Rockport',28.020,-97.054,3],['Port Aransas',27.833,-97.061,3],['Fredericksburg',30.275,-98.872,3],['Kerrville',30.047,-99.140,3],['Junction',30.489,-99.772,3],['Marble Falls',30.578,-98.272,3],['Georgetown',30.633,-97.677,3],['Temple',31.098,-97.342,3],['Brenham',30.166,-96.397,3],['Huntsville',30.723,-95.551,3],['Lufkin',31.338,-94.729,3],['Nacogdoches',31.603,-94.655,3],['Port Arthur',29.885,-93.940,3],['Sherman',33.635,-96.609,3],['Paris',33.661,-95.555,3],['Greenville',33.138,-96.110,4],['Gainesville',33.625,-97.133,4],['Weatherford',32.759,-97.797,4],['Mineral Wells',32.809,-98.112,4],['Stephenville',32.220,-98.202,4],['Brownwood',31.709,-98.991,4],['Big Spring',32.250,-101.478,4],['Plainview',34.185,-101.706,4],['Pampa',35.537,-100.959,4],['Borger',35.667,-101.397,4],['Childress',34.426,-100.204,4],['Palestine',31.762,-95.631,4],['Bay City',28.982,-95.969,4],['Freeport',28.954,-95.359,4],['Harlingen',26.190,-97.696,4],['Pharr',26.194,-98.183,4],['Mission',26.216,-98.325,4],['Edinburg',26.302,-98.164,4],['Hillsboro',32.010,-97.130,5],['Corsicana',32.095,-96.468,5],['Lampasas',31.064,-98.181,5],['Mason',30.749,-99.230,5],['Llano',30.759,-98.675,5],['Burnet',30.758,-98.228,5],['Crystal City',28.677,-99.828,5],['Hebbronville',27.307,-98.681,5],['Falfurrias',27.227,-98.145,5],['Raymondville',26.481,-97.783,5]
+].map(([name,lat,lon,p]) => ({name,lat,lon,p}));
+
+const USA_CITIES = [
+  ['New York',40.713,-74.006,1],['Los Angeles',34.052,-118.244,1],['Chicago',41.878,-87.630,1],['Houston',29.760,-95.369,1],['Phoenix',33.448,-112.074,1],['Philadelphia',39.952,-75.165,1],['San Antonio',29.424,-98.494,1],['San Diego',32.715,-117.161,1],['Dallas',32.776,-96.797,1],['San Jose',37.338,-121.886,1],['Austin',30.267,-97.743,1],['Jacksonville',30.332,-81.656,1],['Fort Worth',32.755,-97.330,1],['Columbus',39.961,-82.999,1],['Charlotte',35.227,-80.843,1],['San Francisco',37.775,-122.419,1],['Indianapolis',39.768,-86.158,1],['Seattle',47.606,-122.332,1],['Denver',39.739,-104.990,1],['Washington',38.907,-77.037,1],['Boston',42.360,-71.059,1],['El Paso',31.761,-106.485,2],['Nashville',36.162,-86.781,2],['Detroit',42.331,-83.046,2],['Oklahoma City',35.468,-97.516,2],['Portland',45.515,-122.679,2],['Las Vegas',36.170,-115.140,2],['Memphis',35.150,-90.049,2],['Louisville',38.253,-85.758,2],['Baltimore',39.290,-76.612,2],['Milwaukee',43.039,-87.906,2],['Albuquerque',35.084,-106.650,2],['Tucson',32.222,-110.974,2],['Fresno',36.738,-119.787,2],['Sacramento',38.581,-121.494,2],['Kansas City',39.099,-94.578,2],['Atlanta',33.749,-84.388,2],['Miami',25.761,-80.192,2],['Raleigh',35.779,-78.638,2],['Omaha',41.256,-95.934,2],['Minneapolis',44.977,-93.265,2],['New Orleans',29.951,-90.072,2],['Cleveland',41.499,-81.694,2],['Tampa',27.951,-82.457,2],['Orlando',28.538,-81.379,2],['St. Louis',38.627,-90.199,2],['Pittsburgh',40.441,-79.996,2],['Cincinnati',39.103,-84.512,3],['Salt Lake City',40.761,-111.891,3],['Birmingham',33.518,-86.810,3],['Tulsa',36.154,-95.992,3],['Wichita',37.687,-97.330,3],['Des Moines',41.586,-93.625,3],['Little Rock',34.746,-92.290,3],['Knoxville',35.961,-83.920,3],['Richmond',37.541,-77.436,3],['Norfolk',36.850,-76.286,3],['Charleston SC',32.777,-79.931,3],['Savannah',32.080,-81.091,3],['Mobile',30.695,-88.040,3],['Pensacola',30.421,-87.216,3],['Jackson MS',32.299,-90.185,3],['Shreveport',32.525,-93.750,3],['Baton Rouge',30.451,-91.187,3],['Corpus Christi',27.801,-97.397,3],['Lubbock',33.577,-101.855,3],['Amarillo',35.222,-101.831,3],['Omaha',41.256,-95.934,3],['Boise',43.615,-116.202,3],['Spokane',47.658,-117.426,3],['Reno',39.530,-119.814,3],['Flagstaff',35.198,-111.651,3],['Rapid City',44.081,-103.231,4],['Bismarck',46.808,-100.784,4],['Fargo',46.877,-96.789,4],['Sioux Falls',43.546,-96.731,4],['Billings',45.783,-108.501,4],['Cheyenne',41.140,-104.820,4],['Colorado Springs',38.833,-104.822,4],['Santa Fe',35.687,-105.938,4],['Roswell',33.394,-104.523,4],['Grand Junction',39.064,-108.550,4],['Eugene',44.052,-123.087,4],['Medford',42.326,-122.875,4],['Bakersfield',35.373,-119.019,4],['Palm Springs',33.830,-116.545,4],['Yuma',32.692,-114.627,4],['Duluth',46.786,-92.100,4],['Green Bay',44.513,-88.014,4],['Grand Rapids',42.963,-85.668,4],['Buffalo',42.887,-78.878,4],['Albany',42.653,-73.756,4],['Hartford',41.765,-72.673,4],['Providence',41.824,-71.412,4],['Portland ME',43.659,-70.256,4],['Burlington',44.476,-73.212,4],['Manchester',42.995,-71.454,4]
+].map(([name,lat,lon,p]) => ({name,lat,lon,p}));
+
+const CITY_SETS = {
+  custom: null,
+  texasCore: TEXAS_CITIES.filter(c => c.p <= 2),
+  texasExpanded: TEXAS_CITIES,
+  usaCore: USA_CITIES.filter(c => c.p <= 2),
+  usaExpanded: USA_CITIES
+};
+
+let map;
+let currentProductKey = 'radar';
+let currentWeatherBounds = RBRTW_BOUNDS.slice();
+let currentWeatherUrl = '';
+let currentLayerSource = '';
+let pointValuesLoaded = false;
+let cityValueMap = new Map();
+let mapOverlays = [];
+let selectedOverlayId = null;
+let ndfdLayerCache = null;
+let ndfdServiceUpdates = null;
+let basemapControlGroups = {placeLabels:[], roadLines:[], roadLabels:[], roadShields:[]};
+let countiesLoaded = false;
+
+function init(){
+  fillProductSelect();
+  bindEvents();
+  initMap();
+  renderAllText();
+  updateUiAvailability();
+  fitStage();
+  renderMapOverlays();
+  renderKeyEditor();
+}
+
+
+function fillProductSelect(){
+  const labels = {
+    radar:'Clouds + Radar Snapshot / IEM NEXRAD tiled radar',
+    radarNowcoast:'NOAA nowCOAST Radar / WMS tiles',
+    radarNoaaTime:'NOAA radar_base_reflectivity_time / ImageServer WMS',
+    radarMrmsTile:'Server-rendered MRMS radar tiles / NOAA MapServer',
+    radarMrmsExport:'MRMS Radar / NOAA MapServer export fallback',
+    owClouds:'Cloud Cover / OpenWeather Tiles',
+    owPrecip:'Precipitation / OpenWeather Tiles',
+    owTemp:'Temperature / OpenWeather Tiles', owHeat:'Feels Like / Heat Index / OpenWeather',
+    owPressure:'Surface Pressure / OpenWeather Tiles',
+    owWind:'Wind / OpenWeather Tiles',
+    temp:'Temperatures / NOAA NDFD Temp', heat:'Heat Index / NOAA NDFD Apparent Temp', humidity:'Humidity / NOAA NDFD RH', maxTemp:'Forecast Highs / NOAA NDFD Max Temp', minTemp:'Forecast Lows / NOAA NDFD Min Temp',
+    spcCat:'Severe Storm Outlook / SPC Categorical', spcTor:'Tornado Outlook / SPC Probability', spcHail:'Hail Outlook / SPC Probability', spcWind:'Damaging Wind Outlook / SPC Probability', wpcChart:'Surface Fronts + Weather / WPC Chart', alerts:'Active NWS Alerts / GeoJSON'
+  };
+  $('layerProduct').innerHTML = Object.keys(PRODUCTS).map(k => `<option value="${k}">${labels[k]}</option>`).join('');
+}
+
+function bindEvents(){
+  window.addEventListener('resize', () => { fitStage(); setTimeout(() => map?.resize(), 50); });
+  ['productTitle','productSubtitle','locationLabel'].forEach(id => $(id).addEventListener('input', renderAllText));
+  $('applyMapView').addEventListener('click', applyMapView);
+  $('fitEwx').addEventListener('click', fitEwx);
+  $('basemapStyle').addEventListener('change', setBasemap);
+  $('showBaseMap').addEventListener('change', setBasemap);
+  $('showBasemapLabels')?.addEventListener('change', applyBasemapLabelVisibility);
+  $('showLoadedTime')?.addEventListener('change', () => setHeaderLoadedText());
+  $('showCities').addEventListener('change', drawCityLabels);
+  $('showNoaaLayer').addEventListener('change', updateWeatherVisibility);
+  $('layerOpacity').addEventListener('input', updateWeatherVisibility);
+  $('layerProduct').addEventListener('change', productChanged);
+  $('productDay').addEventListener('change', refreshWeatherLayer);
+  $('ndfdHour').addEventListener('change', refreshWeatherLayer);
+  $('alertScope')?.addEventListener('change', () => { if (currentProductKey === 'alerts') refreshWeatherLayer(); });
+  $('refreshWeatherLayer').addEventListener('click', refreshWeatherLayer);
+  $('showKey').addEventListener('change', drawKey);
+  ['keyX','keyY','keyScale'].forEach(id => $(id).addEventListener('input', drawKey));
+  $('addKeyRow')?.addEventListener('click', addCurrentKeyRow);
+  $('resetKeyRows')?.addEventListener('click', resetCurrentKeyRows);
+  $('showSourceBar').addEventListener('change', drawSourceBar);
+  ['sourceX','sourceY','sourceW','sourceText'].forEach(id => $(id).addEventListener('input', drawSourceBar));
+  ['cityPreset','cityDensity','cityValueSize','cityNameSize','cityTextColor','cityHaloColor','cityValueDisplay','cityValueSource','cityValueMetric'].forEach(id => $(id)?.addEventListener('input', drawCityLabels));
+  $('applyCityLabels').addEventListener('click', () => { pointValuesLoaded = false; cityValueMap.clear(); drawCityLabels(); });
+  $('loadPointValues').addEventListener('click', loadPointValues);
+  $('clearCityValues')?.addEventListener('click', () => { pointValuesLoaded=false; cityValueMap.clear(); drawCityLabels(); setLayerStatus('City values cleared. City names remain.'); });
+  ['showRoadLayers','showRoadLabels','showRoadShields','roadLineColor','highwayLineColor','roadLabelColor','roadLabelHaloColor','roadLabelSize','roadLabelDensity','roadLineWidth','highwayLineWidth','roadShieldSize'].forEach(id => $(id)?.addEventListener('input', applyBasemapRoadStyling));
+  ['showCountyLines','showCountyNames','countyLineColor','countyLineWidth','countyNameColor','countyNameSize','countyNameHaloColor'].forEach(id => $(id)?.addEventListener('input', applyCountyLayerStyling));
+  $('addTextBox')?.addEventListener('click', () => addMapOverlay({text:'WEATHER NOTE', box:true, w:360, h:96, fontSize:34}));
+  $('addNoBoxText')?.addEventListener('click', () => addMapOverlay({text:'WEATHER NOTE', box:false, w:360, h:70, fontSize:36}));
+  $$('.symbolBtn').forEach(btn => btn.addEventListener('click', () => addMapOverlay({text:btn.dataset.symbol || 'H', box:false, textColor:btn.dataset.color || '#ffffff', w:110, h:90, fontSize:72})));
+  $('exportPng').addEventListener('click', exportPng);
+}
+
+async function initMap(){
+  if (!window.maplibregl) {
+    showStatus('MapLibre did not load. Check CDN/network access.', true);
+    return;
+  }
+  const initialStyle = OPENFREE_BASEMAPS.liberty;
+  map = new maplibregl.Map({
+    container: 'map',
+    style: initialStyle,
+    center: [-98.748, 29.481],
+    zoom: 6.2,
+    bearing: 0,
+    pitch: 0,
+    preserveDrawingBuffer: true,
+    attributionControl: false
+  });
+  map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'bottom-right');
+  map.on('load', () => {
+    fitEwx(false);
+    const selected = $('basemapStyle')?.value || '';
+    if (selected.startsWith('arcgis:')) {
+      setBasemap();
+    } else {
+      refreshWeatherLayer();
+      classifyBasemapLayers();
+      applyBasemapLabelVisibility();
+      applyBasemapRoadStyling();
+      addTexasCountyLayers();
+    }
+  });
+  map.on('move', scheduleMapOverlayRedraw);
+  map.on('moveend', () => { drawCityLabels(); scheduleCountyDataReload(); });
+}
+
+async function setBasemap(){
+  if (!map) return;
+  const show = $('showBaseMap').checked;
+  currentWeatherUrl = currentWeatherUrl || '';
+  if (!show) {
+    map.setStyle(BLANK_STYLE);
+    map.once('idle', restoreLayersAfterBasemapChange);
+    return;
+  }
+  const raw = $('basemapStyle')?.value || 'openfree:liberty';
+  if (raw.startsWith('arcgis:')) {
+    const styleId = raw.replace(/^arcgis:/, '');
+    try {
+      await applyArcgisPluginStyle(styleId);
+      map.once('idle', restoreLayersAfterBasemapChange);
+      return;
+    } catch (err) {
+      console.error(err);
+      showStatusBanner(`ArcGIS plugin basemap failed: ${err.message}. Falling back to OpenFreeMap Liberty.`);
+      setLayerStatus(`ArcGIS plugin basemap failed: ${err.message}. Falling back to OpenFreeMap Liberty.`);
+      map.setStyle(OPENFREE_BASEMAPS.liberty);
+      map.once('idle', restoreLayersAfterBasemapChange);
+      return;
+    }
+  }
+  try {
+    const style = await resolveSelectedBasemapStyle();
+    map.setStyle(style);
+  } catch (err) {
+    console.error(err);
+    showStatusBanner(`Basemap failed: ${err.message}. Falling back to OpenFreeMap Liberty.`);
+    setLayerStatus(`Basemap failed: ${err.message}. Falling back to OpenFreeMap Liberty.`);
+    map.setStyle(OPENFREE_BASEMAPS.liberty);
+  }
+  map.once('idle', restoreLayersAfterBasemapChange);
+}
+
+async function applyArcgisPluginStyle(styleId){
+  const token = getArcgisToken();
+  if (!token) throw new Error('ArcGIS token missing in app.js.');
+  const plugin = window.maplibreArcGIS;
+  if (!plugin?.BasemapStyle?.applyStyle) throw new Error('MapLibre ArcGIS plugin did not load.');
+  await plugin.BasemapStyle.applyStyle(map, {
+    style: styleId,
+    token,
+    preferences: {
+      language: 'en',
+      worldview: 'unitedStatesOfAmerica',
+      places: 'attributed'
+    }
+  });
+}
+
+async function resolveSelectedBasemapStyle(){
+  const raw = $('basemapStyle')?.value || 'openfree:liberty';
+  const [provider, ...rest] = raw.split(':');
+  const styleId = rest.join(':') || raw;
+  const key = provider === 'openfree' ? styleId : raw;
+  return OPENFREE_BASEMAPS[key] || OPENFREE_BASEMAPS.liberty;
+}
+
+async function loadArcgisVectorTileServerStyle(serverUrl){
+  const token = getArcgisToken();
+  if (!token) throw new Error('ArcGIS basemap token is missing in app.js.');
+  const cleanServer = String(serverUrl || '').replace(/\/$/, '');
+  if (!/\/VectorTileServer$/i.test(cleanServer)) throw new Error('ArcGIS VectorTileServer URL is invalid.');
+  const styleUrl = `${cleanServer}/resources/styles/root.json?token=${encodeURIComponent(token)}`;
+  const res = await fetch(styleUrl, {headers:{Accept:'application/json'}});
+  const style = await res.json().catch(() => null);
+  if (!res.ok || !style || style.error) {
+    const msg = style?.error?.message || style?.message || `${res.status} ${res.statusText}`;
+    throw new Error(`ArcGIS VectorTileServer style could not load: ${msg}`);
+  }
+  return patchArcgisStyleToken(style, token, styleUrl, cleanServer);
+}
+
+async function loadArcgisBasemapStyle(styleId){
+  const token = getArcgisToken();
+  if (!token) throw new Error('ArcGIS basemap token is missing in app.js.');
+  const url = `${ARCGIS_BASEMAP_STYLES_URL}/${styleId}?token=${encodeURIComponent(token)}`;
+  const res = await fetch(url, {headers:{Accept:'application/json'}});
+  const style = await res.json().catch(() => null);
+  if (!res.ok || !style || style.error) {
+    const msg = style?.error?.message || style?.message || `${res.status} ${res.statusText}`;
+    throw new Error(`ArcGIS style ${styleId} could not load: ${msg}`);
+  }
+  return patchArcgisStyleToken(style, token, url, '');
+}
+
+function patchArcgisStyleToken(style, token, styleUrl='', serverUrl=''){
+  const patched = JSON.parse(JSON.stringify(style));
+  patched.metadata = Object.assign({}, patched.metadata || {}, {rbrtwBasemapProvider:'arcgis'});
+  const addToken = (url) => {
+    if (typeof url !== 'string') return url;
+    let out = url;
+    try {
+      if (styleUrl && !/^https?:\/\//i.test(out)) out = new URL(out, styleUrl).href;
+    } catch (err) {}
+    if (serverUrl && (out === '..' || out === '../..' || out === './')) out = serverUrl;
+    if (!/arcgis\.com|arcgisonline\.com|tiles\.arcgis\.com|basemapstyles-api\.arcgis\.com|basemaps-api\.arcgis\.com/i.test(out)) return out;
+    if (/([?&])token=/.test(out)) return out;
+    return `${out}${out.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  };
+  if (typeof patched.sprite === 'string') patched.sprite = addToken(patched.sprite);
+  if (typeof patched.glyphs === 'string') patched.glyphs = addToken(patched.glyphs);
+  if (patched.sources) {
+    for (const source of Object.values(patched.sources)) {
+      if (!source || typeof source !== 'object') continue;
+      if (typeof source.url === 'string') source.url = addToken(source.url);
+      if (Array.isArray(source.tiles)) source.tiles = source.tiles.map(addToken);
+    }
+  }
+  return patched;
+}
+
+function getArcgisToken(){
+  return (ARCGIS_DEFAULT_TOKEN || '').trim();
+}
+
+function restoreLayersAfterBasemapChange(){
+  const p = PRODUCTS[currentProductKey];
+  if (p?.service === 'openweatherTile') addOpenWeatherTileLayer(p.openWeatherLayer);
+  else if (p?.service === 'radarTile') addRadarTileLayer(p);
+  else if (p?.service === 'wmsTile') addWmsRadarTileLayer(p);
+  else if (currentWeatherUrl && currentProductKey !== 'alerts') addWeatherImageLayer(currentWeatherUrl, currentWeatherBounds);
+  else if (currentProductKey !== 'alerts') refreshWeatherLayer();
+  if (currentProductKey === 'alerts') refreshWeatherLayer();
+  classifyBasemapLayers();
+  applyBasemapLabelVisibility();
+  applyBasemapRoadStyling();
+  addTexasCountyLayers();
+  drawCityLabels();
+}
+
+function productChanged(){
+  currentProductKey = $('layerProduct').value;
+  const p = PRODUCTS[currentProductKey];
+  $('productTitle').value = p.title;
+  $('productSubtitle').value = '';
+  if ($('clearCityValuesOnLayerChange')?.checked) {
+    cityValueMap.clear();
+    pointValuesLoaded = false;
+  }
+  renderKeyEditor();
+  renderAllText();
+  updateUiAvailability();
+  drawCityLabels();
+  refreshWeatherLayer();
+}
+
+function updateUiAvailability(){
+  const p = PRODUCTS[currentProductKey];
+  $('productDay').disabled = !p.dayEnabled;
+  $('ndfdHour').disabled = !p.hourEnabled;
+}
+
+function applyMapView(){
+  const lat = Number($('centerLat').value), lon = Number($('centerLon').value), zoom = Number($('zoomLevel').value), bearing = Number($('mapBearing').value);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(zoom)) { showStatus('Invalid center or zoom.', true); return; }
+  map.flyTo({center:[lon,lat], zoom, bearing:Number.isFinite(bearing)?bearing:0, duration:450});
+}
+
+function fitEwx(animate=true){
+  if (!map) return;
+  map.fitBounds([[RBRTW_BOUNDS[0], RBRTW_BOUNDS[1]],[RBRTW_BOUNDS[2], RBRTW_BOUNDS[3]]], {padding:35, duration: animate ? 500 : 0});
+}
+
+function setHeaderLoadedText(){
+  const out = $('loadedOut');
+  if (!out) return;
+  out.textContent = $('showLoadedTime')?.checked ? timeStamp() : '';
+}
+
+function classifyBasemapLayers(){
+  basemapControlGroups = {placeLabels:[], roadLines:[], roadLabels:[], roadShields:[]};
+  if (!map || !map.getStyle) return basemapControlGroups;
+  const style = map.getStyle();
+  if (!style?.layers) return basemapControlGroups;
+  for (const layer of style.layers) {
+    if (isRoadLayer(layer)) basemapControlGroups.roadLines.push(layer.id);
+    else if (isRoadShieldLayer(layer)) basemapControlGroups.roadShields.push(layer.id);
+    else if (isRoadLabelLayer(layer)) basemapControlGroups.roadLabels.push(layer.id);
+    else if (isPlaceLabelLayer(layer)) basemapControlGroups.placeLabels.push(layer.id);
+  }
+  return basemapControlGroups;
+}
+
+function basemapLayerText(layer){
+  return `${layer.id || ''} ${layer['source-layer'] || ''} ${layer.type || ''}`.toLowerCase();
+}
+
+function isRoadLayer(layer){
+  const t = basemapLayerText(layer);
+  if (/(rail|aeroway|airport|runway|waterway|ferry|admin|boundary)/.test(t)) return false;
+  return layer.type === 'line' && /(road|highway|motorway|trunk|primary|secondary|tertiary|street|transport|transportation|path|track)/.test(t);
+}
+
+function isHighwayLayer(layer){
+  const t = basemapLayerText(layer);
+  return /(motorway|trunk|primary|highway|major|interstate|shield|route)/.test(t);
+}
+
+
+function isRoadShieldLayer(layer){
+  const t = basemapLayerText(layer);
+  if (layer.type !== 'symbol') return false;
+  const layout = layer.layout || {};
+  const hasIcon = Object.prototype.hasOwnProperty.call(layout, 'icon-image');
+  const hasText = Object.prototype.hasOwnProperty.call(layout, 'text-field');
+  if (/(shield|road-number|route-number|route marker|highway shield|motorway_junction|exit)/.test(t)) return true;
+  return hasIcon && hasText && /(road|highway|motorway|trunk|primary|secondary|route|transportation)/.test(t);
+}
+function isRoadLabelLayer(layer){
+  const t = basemapLayerText(layer);
+  if (layer.type !== 'symbol') return false;
+  if (isRoadShieldLayer(layer)) return false;
+  const placement = String(layer.layout?.['symbol-placement'] || '').toLowerCase();
+  const sourceLayer = String(layer['source-layer'] || '').toLowerCase();
+  const hasText = layer.layout && Object.prototype.hasOwnProperty.call(layer.layout, 'text-field');
+  if (!hasText) return false;
+  if (placement === 'line' || /(transportation_name|transportation|road|street|highway|motorway|trunk|route|shield)/.test(t) || /(transportation_name|transportation)/.test(sourceLayer)) return true;
+  return false;
+}
+
+function isPlaceLabelLayer(layer){
+  const t = basemapLayerText(layer);
+  if (layer.type !== 'symbol') return false;
+  if (isRoadLabelLayer(layer)) return false;
+  const sourceLayer = String(layer['source-layer'] || '').toLowerCase();
+  const hasText = layer.layout && Object.prototype.hasOwnProperty.call(layer.layout, 'text-field');
+  if (!hasText) return false;
+  if (/(place|settlement|city|town|village|hamlet|locality|neighbourhood|neighborhood|suburb|capital)/.test(sourceLayer)) return true;
+  return /(place|settlement|city|town|village|hamlet|locality|neighbourhood|neighborhood|suburb|capital)/.test(t);
+}
+
+function ensureBasemapLayerGroups(){
+  if (!basemapControlGroups.placeLabels.length && !basemapControlGroups.roadLines.length && !basemapControlGroups.roadLabels.length && !basemapControlGroups.roadShields.length) {
+    classifyBasemapLayers();
+  }
+}
+
+function applyBasemapLabelVisibility(){
+  if (!map || !map.getStyle) return;
+  ensureBasemapLayerGroups();
+  const show = $('showBasemapLabels')?.checked === true;
+  for (const id of basemapControlGroups.placeLabels) {
+    if (map.getLayer(id)) {
+      try { map.setLayoutProperty(id, 'visibility', show ? 'visible' : 'none'); } catch (err) {}
+    }
+  }
+}
+
+function applyBasemapRoadStyling(){
+  if (!map || !map.getStyle) return;
+  ensureBasemapLayerGroups();
+  const showRoads = $('showRoadLayers')?.checked !== false;
+  const showRoadLabels = $('showRoadLabels')?.checked !== false;
+  const showRoadShields = $('showRoadShields')?.checked !== false;
+  const roadColor = $('roadLineColor')?.value || '#8f9bad';
+  const highwayColor = $('highwayLineColor')?.value || '#f2c14e';
+  const labelColor = $('roadLabelColor')?.value || '#e8eef8';
+  const haloColor = $('roadLabelHaloColor')?.value || '#08101f';
+  const labelSize = Number($('roadLabelSize')?.value || 17);
+  const roadWidth = Number($('roadLineWidth')?.value || 1.8);
+  const highwayWidth = Number($('highwayLineWidth')?.value || 3);
+  const shieldSize = Number($('roadShieldSize')?.value || 1.35);
+  const density = $('roadLabelDensity')?.value || 'expanded';
+  const expandedLabels = density === 'expanded' || density === 'broadcast';
+  const broadcastLabels = density === 'broadcast';
+  const style = map.getStyle();
+  const layerById = new Map((style?.layers || []).map(layer => [layer.id, layer]));
+
+  for (const id of basemapControlGroups.roadLines) {
+    if (!map.getLayer(id)) continue;
+    const layer = layerById.get(id) || {id};
+    try {
+      map.setLayoutProperty(id, 'visibility', showRoads ? 'visible' : 'none');
+      if (showRoads) {
+        const highway = isHighwayLayer(layer);
+        map.setPaintProperty(id, 'line-color', highway ? highwayColor : roadColor);
+        map.setPaintProperty(id, 'line-width', highway ? highwayWidth : roadWidth);
+        map.setPaintProperty(id, 'line-opacity', highway ? 0.98 : 0.82);
+      }
+    } catch (err) {}
+  }
+
+  for (const id of basemapControlGroups.roadLabels) {
+    if (!map.getLayer(id)) continue;
+    try {
+      map.setLayoutProperty(id, 'visibility', showRoadLabels ? 'visible' : 'none');
+      if (showRoadLabels) {
+        map.setPaintProperty(id, 'text-color', labelColor);
+        map.setPaintProperty(id, 'text-halo-color', haloColor);
+        map.setPaintProperty(id, 'text-halo-width', 2.6);
+        map.setPaintProperty(id, 'text-opacity', 1);
+        map.setLayoutProperty(id, 'text-size', labelSize);
+        map.setLayoutProperty(id, 'text-allow-overlap', expandedLabels);
+        map.setLayoutProperty(id, 'text-ignore-placement', expandedLabels);
+        if (broadcastLabels) {
+          try { map.setLayoutProperty(id, 'symbol-spacing', 100); } catch (err) {}
+          try { map.setLayoutProperty(id, 'text-padding', 0); } catch (err) {}
+        }
+      }
+    } catch (err) {}
+  }
+
+  for (const id of basemapControlGroups.roadShields) {
+    if (!map.getLayer(id)) continue;
+    try {
+      map.setLayoutProperty(id, 'visibility', (showRoadLabels && showRoadShields) ? 'visible' : 'none');
+      if (showRoadLabels && showRoadShields) {
+        map.setPaintProperty(id, 'text-color', '#061020');
+        map.setPaintProperty(id, 'text-halo-color', '#ffffff');
+        map.setPaintProperty(id, 'text-halo-width', 1.2);
+        map.setLayoutProperty(id, 'text-size', Math.max(10, Math.round(labelSize * 0.78)));
+        try { map.setLayoutProperty(id, 'icon-size', shieldSize); } catch (err) {}
+        map.setLayoutProperty(id, 'text-allow-overlap', expandedLabels);
+        map.setLayoutProperty(id, 'text-ignore-placement', expandedLabels);
+        map.setLayoutProperty(id, 'icon-allow-overlap', expandedLabels);
+        map.setLayoutProperty(id, 'icon-ignore-placement', expandedLabels);
+        if (broadcastLabels) {
+          try { map.setLayoutProperty(id, 'symbol-spacing', 80); } catch (err) {}
+          try { map.setLayoutProperty(id, 'icon-padding', 0); } catch (err) {}
+          try { map.setLayoutProperty(id, 'text-padding', 0); } catch (err) {}
+        }
+      }
+    } catch (err) {}
+  }
+}
+
+function countyBboxForRequest(){
+  if (!map) return RBRTW_BOUNDS.join(',');
+  const b = getCurrentBbox();
+  const padLon = Math.max(0.25, (b[2]-b[0]) * 0.10);
+  const padLat = Math.max(0.25, (b[3]-b[1]) * 0.10);
+  const w = Math.max(-106.8, b[0]-padLon);
+  const s = Math.max(25.5, b[1]-padLat);
+  const e = Math.min(-93.2, b[2]+padLon);
+  const n = Math.min(36.8, b[3]+padLat);
+  return [w,s,e,n].map(v => Number(v).toFixed(5)).join(',');
+}
+
+function countyGeojsonUrl(){
+  return `/.netlify/functions/noaa-map?op=counties&bbox=${encodeURIComponent(countyBboxForRequest())}`;
+}
+
+async function loadTexasCountyData(){
+  if (!map || !map.getSource('texas-counties-source')) return;
+  try {
+    const res = await fetch(countyGeojsonUrl(), {headers:{Accept:'application/geo+json, application/json'}});
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const data = await res.json();
+    const src = map.getSource('texas-counties-source');
+    if (src?.setData) src.setData(data);
+    countiesLoaded = true;
+    ensureCountyLayerOrder();
+  } catch (err) {
+    countiesLoaded = false;
+    console.warn('Texas county data failed', err);
+    setLayerStatus(`Texas county outlines failed to load: ${err.message}`);
+  }
+}
+
+function addTexasCountyLayers(){
+  if (!map || !map.isStyleLoaded()) return;
+  try {
+    if (!map.getSource('texas-counties-source')) {
+      map.addSource('texas-counties-source', {type:'geojson', data:TEXAS_COUNTIES_GEOJSON_EMPTY});
+    }
+    if (!map.getLayer('texas-counties-line')) {
+      map.addLayer({
+        id:'texas-counties-line', type:'line', source:'texas-counties-source',
+        paint:{'line-color':$('countyLineColor')?.value || '#75e6ff','line-width':Number($('countyLineWidth')?.value || 2.2),'line-opacity':0.92}
+      });
+    }
+    if (!map.getLayer('texas-counties-label')) {
+      map.addLayer({
+        id:'texas-counties-label', type:'symbol', source:'texas-counties-source',
+        layout:{'text-field':['coalesce',['get','BASENAME'],['get','NAME']],'text-size':Number($('countyNameSize')?.value || 14),'text-allow-overlap':false,'text-ignore-placement':false},
+        paint:{'text-color':$('countyNameColor')?.value || '#d7f7ff','text-halo-color':$('countyNameHaloColor')?.value || '#03101f','text-halo-width':2.2,'text-opacity':0.95}
+      });
+    }
+    applyCountyLayerStyling();
+    ensureCountyLayerOrder();
+    loadTexasCountyData();
+  } catch (err) {
+    countiesLoaded = false;
+    console.warn('Texas county layer failed', err);
+    setLayerStatus(`Texas county layer failed: ${err.message}`);
+  }
+}
+
+function ensureCountyLayerOrder(){
+  if (!map) return;
+  try { if (map.getLayer('texas-counties-line')) map.moveLayer('texas-counties-line'); } catch (err) {}
+  try { if (map.getLayer('texas-counties-label')) map.moveLayer('texas-counties-label'); } catch (err) {}
+}
+
+function applyCountyLayerStyling(){
+  if (!map || !map.getStyle) return;
+  if (!map.getSource('texas-counties-source')) { addTexasCountyLayers(); return; }
+  const showLines = $('showCountyLines')?.checked !== false;
+  const showNames = $('showCountyNames')?.checked === true;
+  if (map.getLayer('texas-counties-line')) {
+    try {
+      map.setLayoutProperty('texas-counties-line','visibility', showLines ? 'visible' : 'none');
+      map.setPaintProperty('texas-counties-line','line-color', $('countyLineColor')?.value || '#75e6ff');
+      map.setPaintProperty('texas-counties-line','line-width', Number($('countyLineWidth')?.value || 2.2));
+    } catch (err) {}
+  }
+  if (map.getLayer('texas-counties-label')) {
+    try {
+      map.setLayoutProperty('texas-counties-label','visibility', showNames ? 'visible' : 'none');
+      map.setLayoutProperty('texas-counties-label','text-size', Number($('countyNameSize')?.value || 14));
+      map.setPaintProperty('texas-counties-label','text-color', $('countyNameColor')?.value || '#d7f7ff');
+      map.setPaintProperty('texas-counties-label','text-halo-color', $('countyNameHaloColor')?.value || '#03101f');
+      map.setPaintProperty('texas-counties-label','text-halo-width', 2.2);
+    } catch (err) {}
+  }
+  ensureCountyLayerOrder();
+}
+
+
+let countyReloadTimer = null;
+function scheduleCountyDataReload(){
+  if (!$('showCountyLines')?.checked && !$('showCountyNames')?.checked) return;
+  if (!map?.getSource('texas-counties-source')) return;
+  clearTimeout(countyReloadTimer);
+  countyReloadTimer = setTimeout(() => loadTexasCountyData(), 650);
+}
+
+let overlayRedrawPending = false;
+function scheduleMapOverlayRedraw(){
+  if (overlayRedrawPending) return;
+  overlayRedrawPending = true;
+  requestAnimationFrame(() => {
+    overlayRedrawPending = false;
+    drawCityLabels();
+  });
+}
+
+function renderAllText(){
+  $('titleOut').textContent = $('productTitle').value || '';
+  $('subtitleOut').textContent = '';
+  $('locationOut').textContent = ($('locationLabel').value || '').toUpperCase();
+  drawSourceBar();
+}
+
+function getCurrentBbox(){
+  const b = map.getBounds();
+  return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+}
+
+function getProductLayerConfig(){
+  const p = PRODUCTS[currentProductKey];
+  const day = Number($('productDay').value || 1);
+  const hour = $('ndfdHour').value;
+  let layers = p.layers || '';
+  if (p.layersByHour) layers = p.layersByHour[hour] || p.layersByHour[0];
+  if (p.spcKind) layers = (SPC_LAYERS[p.spcKind] || {})[day] || '';
+  if (currentProductKey === 'wpcChart') layers = WPC_LAYERS[day] || WPC_LAYERS[1];
+  return {product:p, layers, day, hour};
+}
+
+
+async function getDynamicProductLayerConfig(product, day, hour){
+  let layers = product.layers || '';
+  let time = '';
+  if (product.layersByHour || ['temp','heat','humidity','maxTemp','minTemp'].includes(currentProductKey)) {
+    const ndfd = await resolveNdfdLayerRequest(currentProductKey, hour);
+    layers = ndfd.layers || layers;
+    time = ndfd.time || '';
+  }
+  if (product.spcKind) layers = (SPC_LAYERS[product.spcKind] || {})[day] || '';
+  if (currentProductKey === 'wpcChart') layers = WPC_LAYERS[day] || WPC_LAYERS[1];
+  return {product, layers, day, hour, time};
+}
+
+function ndfdForecastTime(hourValue){
+  const h = String(hourValue || '0');
+  const now = Date.now();
+  const offsetHours = h === '0' ? 0 : Number(h);
+  const roundedNow = Math.round(now / 3600000) * 3600000;
+  const target = roundedNow + (Number.isFinite(offsetHours) ? offsetHours * 3600000 : 0);
+  return String(target);
+}
+
+async function fetchNdfdLayers(){
+  if (ndfdLayerCache) return ndfdLayerCache;
+  const res = await fetch('/.netlify/functions/noaa-map?op=layers&service=ndfdTemp', {headers:{Accept:'application/json'}});
+  if (!res.ok) throw new Error(`NDFD layer metadata failed ${res.status}`);
+  ndfdLayerCache = await res.json();
+  return ndfdLayerCache;
+}
+
+async function fetchNdfdUpdates(){
+  if (ndfdServiceUpdates) return ndfdServiceUpdates;
+  const res = await fetch('/.netlify/functions/noaa-map?op=metadata&service=ndfdTemp&returnUpdates=true', {headers:{Accept:'application/json'}});
+  if (!res.ok) return null;
+  ndfdServiceUpdates = await res.json();
+  return ndfdServiceUpdates;
+}
+
+function layerSearchText(layer){
+  return `${layer.id ?? ''} ${layer.name ?? ''} ${layer.type ?? ''} ${layer.description ?? ''}`.toLowerCase();
+}
+
+function isRenderableNdfdLayer(layer){
+  const t = layerSearchText(layer);
+  if (/footprint|boundary|label|contour|annotation|group/.test(t)) return false;
+  return /image|raster|temperature|humidity|apparent|max|min/.test(t);
+}
+
+function fallbackNdfdLayer(productKey, hour){
+  const h = String(hour || '0');
+  const fallbacks = {
+    temp: {0:'show:4','00':'show:8','03':'show:12','06':'show:16','09':'show:20','12':'show:24','15':'show:28','18':'show:32','21':'show:36','24':'show:40'},
+    heat: {0:'show:45','00':'show:49','03':'show:53','06':'show:57','09':'show:61','12':'show:65','15':'show:69','18':'show:73','21':'show:77','24':'show:81'},
+    humidity: {0:'show:86','00':'show:90','03':'show:94','06':'show:98','09':'show:102','12':'show:106','15':'show:110','18':'show:114','21':'show:118','24':'show:122'},
+    maxTemp: {0:'show:127'},
+    minTemp: {0:'show:140'}
+  };
+  return (fallbacks[productKey] && (fallbacks[productKey][h] || fallbacks[productKey][0])) || '';
+}
+
+function matchesNdfdProduct(layer, productKey){
+  const t = layerSearchText(layer);
+  if (productKey === 'heat') return /apparent/.test(t);
+  if (productKey === 'humidity') return /relative\s*humidity|humidity/.test(t);
+  if (productKey === 'maxTemp') return /max|maximum/.test(t) && /temp|temperature/.test(t);
+  if (productKey === 'minTemp') return /min|minimum/.test(t) && /temp|temperature/.test(t);
+  if (productKey === 'temp') return /temp|temperature/.test(t) && !/apparent|max|maximum|min|minimum|humidity/.test(t);
+  return false;
+}
+
+function preferredNdfdLayerId(layers, productKey, hour){
+  const candidates = (layers || []).filter(layer => isRenderableNdfdLayer(layer) && matchesNdfdProduct(layer, productKey));
+  if (!candidates.length) return null;
+  const h = String(hour || '0');
+  const hourNum = h === '0' ? 0 : Number(h);
+  const scored = candidates.map(layer => {
+    const t = layerSearchText(layer);
+    let score = 0;
+    if (/image|raster/.test(t)) score += 20;
+    if (Number.isFinite(hourNum) && new RegExp(`(^|\\D)${hourNum}(\\D|$)`).test(t)) score += 25;
+    if (h === '0' && /(0-24|0\s*to\s*24|current|latest)/.test(t)) score += 25;
+    if (/label|contour|footprint/.test(t)) score -= 100;
+    return {layer, score};
+  }).sort((a,b) => b.score - a.score || Number(a.layer.id) - Number(b.layer.id));
+  return scored[0]?.layer?.id ?? null;
+}
+
+async function resolveNdfdLayerRequest(productKey, hour){
+  const time = ndfdForecastTime(hour);
+  let layers = fallbackNdfdLayer(productKey, hour);
+  try {
+    const meta = await fetchNdfdLayers();
+    const id = preferredNdfdLayerId(meta.layers || [], productKey, hour);
+    if (id !== null && id !== undefined) layers = `show:${id}`;
+    await fetchNdfdUpdates();
+  } catch (err) {
+    console.warn('NDFD metadata resolver failed; using fallback layer IDs', err);
+  }
+  return {layers, time:''};
+}
+
+async function refreshWeatherLayer(){
+  if (!map) return;
+  const baseConfig = getProductLayerConfig();
+  const {product, day, hour} = baseConfig;
+  const dynamicConfig = await getDynamicProductLayerConfig(product, day, hour);
+  const layers = dynamicConfig.layers;
+  const time = dynamicConfig.time;
+  hideStatusBanner();
+  setLayerStatus('Requesting real weather layer...');
+  currentWeatherBounds = getCurrentBbox();
+  try {
+    removeWeatherLayers();
+    if (product.service === 'radarTile') {
+      currentWeatherUrl = '';
+      currentLayerSource = product.sourceLabel;
+      addRadarTileLayer(product);
+      addTexasCountyLayers();
+      setHeaderLoadedText();
+      setLayerStatus(`Loaded tiled radar layer: ${product.sourceLabel}.`);
+      drawKey(); drawSourceBar(); drawCityLabels();
+      return;
+    }
+    if (product.service === 'wmsTile') {
+      currentWeatherUrl = '';
+      currentLayerSource = product.sourceLabel;
+      addWmsRadarTileLayer(product);
+      addTexasCountyLayers();
+      setHeaderLoadedText();
+      setLayerStatus(`Loaded WMS radar tile layer: ${product.sourceLabel}.`);
+      drawKey(); drawSourceBar(); drawCityLabels();
+      return;
+    }
+    if (product.service === 'openweatherTile') {
+      await assertOpenWeatherReady();
+      currentWeatherUrl = '';
+      currentLayerSource = product.sourceLabel;
+      addOpenWeatherTileLayer(product.openWeatherLayer);
+      addTexasCountyLayers();
+      setHeaderLoadedText();
+      setLayerStatus(`Loaded real OpenWeather tile layer: ${product.openWeatherLayer}. NOAA/NWS layers remain available separately.`);
+      drawKey(); drawSourceBar(); drawCityLabels();
+      return;
+    }
+    if (currentProductKey === 'alerts') {
+      await loadAlertLayer();
+      addTexasCountyLayers();
+      currentLayerSource = product.sourceLabel;
+      setHeaderLoadedText();
+      setLayerStatus(`Loaded NWS active alert polygons using ${($('alertScope')?.value || 'tx') === 'national' ? 'national' : 'Texas'} scope, filtered to the current map view.`);
+      drawKey(); drawSourceBar(); drawCityLabels();
+      return;
+    }
+    if (product.spcKind && !layers) {
+      throw new Error(`${product.title} only has separate tornado/hail/wind probability layers for SPC Day 1 and Day 2. Choose categorical for Day 3–8.`);
+    }
+    const bbox = currentWeatherBounds.map(v => Number(v).toFixed(6)).join(',');
+    const params = new URLSearchParams({op:'export', service:product.service, bbox, size:MAP_SIZE.join(','), transparent:'true', imageSR:'4326'});
+    if (layers) params.set('layers', layers);
+    if (time) params.set('time', time);
+    const url = `/.netlify/functions/noaa-map?${params.toString()}&cache=${Date.now()}`;
+    await validateImage(url);
+    currentWeatherUrl = url;
+    currentLayerSource = product.sourceLabel;
+    addWeatherImageLayer(url, currentWeatherBounds);
+    addTexasCountyLayers();
+    setHeaderLoadedText();
+    setLayerStatus(`Loaded real layer: ${product.sourceLabel}${layers ? ` (${layers})` : ' (default visible layers)'}.`);
+    drawKey(); drawSourceBar(); drawCityLabels();
+  } catch (err) {
+    console.error(err);
+    currentWeatherUrl = '';
+    currentLayerSource = product.sourceLabel;
+    showStatusBanner(`Layer failed: ${err.message}`);
+    setLayerStatus(`Layer failed: ${err.message}`);
+    drawKey(); drawSourceBar(); drawCityLabels();
+  }
+}
+
+function addWeatherImageLayer(url, bbox){
+  if (!map || !map.isStyleLoaded()) return;
+  removeWeatherImageOnly();
+  const [w,s,e,n] = bbox;
+  map.addSource('weather-image-source', {type:'image', url, coordinates:[[w,n],[e,n],[e,s],[w,s]]});
+  map.addLayer({id:'weather-image-layer', type:'raster', source:'weather-image-source', paint:{'raster-opacity':Number($('layerOpacity').value || 0.72), 'raster-fade-duration':0}});
+  updateWeatherVisibility();
+}
+
+async function assertOpenWeatherReady(){
+  const res = await fetch('/.netlify/functions/openweather?op=status', {headers:{Accept:'application/json'}});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ready) {
+    throw new Error(data.error || 'OpenWeather function is not ready. Add OPENWEATHER_API_KEY in Netlify environment variables and redeploy.');
+  }
+}
+
+function addOpenWeatherTileLayer(layerName){
+  if (!map || !map.isStyleLoaded()) return;
+  removeOpenWeatherLayerOnly();
+  const encodedLayer = encodeURIComponent(layerName);
+  map.addSource('openweather-source', {
+    type:'raster',
+    tiles:[`/.netlify/functions/openweather?op=tile&layer=${encodedLayer}&z={z}&x={x}&y={y}`],
+    tileSize:256,
+    attribution:'OpenWeather'
+  });
+  map.addLayer({
+    id:'openweather-layer',
+    type:'raster',
+    source:'openweather-source',
+    paint:{'raster-opacity':Number($('layerOpacity').value || 0.72), 'raster-fade-duration':0}
+  });
+  updateWeatherVisibility();
+}
+
+function addRadarTileLayer(product){
+  if (!map || !map.isStyleLoaded()) return;
+  removeRadarTileLayerOnly();
+  const src = product?.radarSource || 'iem';
+  map.addSource('radar-tile-source', {
+    type:'raster',
+    tiles:[`/.netlify/functions/noaa-map?op=iemRadarTile&source=${encodeURIComponent(src)}&z={z}&x={x}&y={y}`],
+    tileSize:256,
+    attribution:'IEM/NEXRAD'
+  });
+  map.addLayer({id:'radar-tile-layer', type:'raster', source:'radar-tile-source', paint:{'raster-opacity':Number($('layerOpacity').value || 0.72), 'raster-fade-duration':0}});
+  updateWeatherVisibility();
+}
+
+function addWmsRadarTileLayer(product){
+  if (!map || !map.isStyleLoaded()) return;
+  removeRadarTileLayerOnly();
+  const src = product?.wmsSource || 'nowcoast';
+  map.addSource('radar-tile-source', {
+    type:'raster',
+    tiles:[`/.netlify/functions/noaa-map?op=wmsRadarTile&source=${encodeURIComponent(src)}&bbox={bbox-epsg-3857}`],
+    tileSize:256,
+    attribution:'NOAA/NWS'
+  });
+  map.addLayer({id:'radar-tile-layer', type:'raster', source:'radar-tile-source', paint:{'raster-opacity':Number($('layerOpacity').value || 0.72), 'raster-fade-duration':0}});
+  updateWeatherVisibility();
+}
+
+function removeWeatherImageOnly(){
+  if (map.getLayer('weather-image-layer')) map.removeLayer('weather-image-layer');
+  if (map.getSource('weather-image-source')) map.removeSource('weather-image-source');
+}
+
+function removeOpenWeatherLayerOnly(){
+  if (map.getLayer('openweather-layer')) map.removeLayer('openweather-layer');
+  if (map.getSource('openweather-source')) map.removeSource('openweather-source');
+}
+
+function removeRadarTileLayerOnly(){
+  if (map.getLayer('radar-tile-layer')) map.removeLayer('radar-tile-layer');
+  if (map.getSource('radar-tile-source')) map.removeSource('radar-tile-source');
+}
+
+function removeWeatherLayers(){
+  removeWeatherImageOnly();
+  removeOpenWeatherLayerOnly();
+  removeRadarTileLayerOnly();
+  if (map.getLayer('nws-alerts-fill')) map.removeLayer('nws-alerts-fill');
+  if (map.getLayer('nws-alerts-line')) map.removeLayer('nws-alerts-line');
+  if (map.getSource('nws-alerts-source')) map.removeSource('nws-alerts-source');
+}
+
+function updateWeatherVisibility(){
+  const visible = $('showNoaaLayer').checked ? 'visible' : 'none';
+  if (map?.getLayer('weather-image-layer')) {
+    map.setLayoutProperty('weather-image-layer','visibility', visible);
+    map.setPaintProperty('weather-image-layer','raster-opacity', Number($('layerOpacity').value || 0.72));
+  }
+  if (map?.getLayer('openweather-layer')) {
+    map.setLayoutProperty('openweather-layer','visibility', visible);
+    map.setPaintProperty('openweather-layer','raster-opacity', Number($('layerOpacity').value || 0.72));
+  }
+  if (map?.getLayer('radar-tile-layer')) {
+    map.setLayoutProperty('radar-tile-layer','visibility', visible);
+    map.setPaintProperty('radar-tile-layer','raster-opacity', Number($('layerOpacity').value || 0.72));
+  }
+  ['nws-alerts-fill','nws-alerts-line'].forEach(id => {
+    if (map?.getLayer(id)) map.setLayoutProperty(id,'visibility', visible);
+  });
+}
+
+async function loadAlertLayer(){
+  const scope = $('alertScope')?.value || 'tx';
+  const url = scope === 'national' ? 'https://api.weather.gov/alerts/active' : 'https://api.weather.gov/alerts/active?area=TX';
+  const res = await fetch(url, {headers:{Accept:'application/geo+json'}});
+  if (!res.ok) throw new Error(`NWS alerts API returned ${res.status}`);
+  const data = await res.json();
+  const filtered = filterFeaturesToBbox(data, getCurrentBbox());
+  if (!filtered.features.length) showStatusBanner(`No active ${scope === 'national' ? 'national' : 'Texas'} alert polygons intersect the current map view.`);
+  map.addSource('nws-alerts-source', {type:'geojson', data:filtered});
+  map.addLayer({id:'nws-alerts-fill', type:'fill', source:'nws-alerts-source', paint:{'fill-color':['match',['get','severity'],'Extreme','#ff00ff','Severe','#ff2222','Moderate','#ff9d00','Minor','#ffe23a','#00d2ff'], 'fill-opacity':0.38}});
+  map.addLayer({id:'nws-alerts-line', type:'line', source:'nws-alerts-source', paint:{'line-color':'#ffffff','line-width':3}});
+}
+
+function filterFeaturesToBbox(fc, bbox){
+  const [w,s,e,n] = bbox;
+  const features = (fc.features || []).filter(f => {
+    if (!f.geometry) return false;
+    const b = featureBbox(f.geometry.coordinates.flat(Infinity));
+    return b && !(b.e < w || b.w > e || b.n < s || b.s > n);
+  });
+  return {type:'FeatureCollection', features};
+}
+
+function featureBbox(nums){
+  const lons=[], lats=[];
+  for (let i=0;i<nums.length-1;i+=2) { const lon=Number(nums[i]), lat=Number(nums[i+1]); if (Number.isFinite(lon) && Number.isFinite(lat)) {lons.push(lon); lats.push(lat);} }
+  if (!lons.length) return null;
+  return {w:Math.min(...lons), e:Math.max(...lons), s:Math.min(...lats), n:Math.max(...lats)};
+}
+
+function validateImage(url){
+  return new Promise((resolve,reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => (img.naturalWidth > 1 && img.naturalHeight > 1) ? resolve() : reject(new Error('NOAA image was empty.'));
+    img.onerror = () => reject(new Error('NOAA image request failed or returned non-image data.'));
+    img.src = url;
+  });
+}
+
+function setLayerStatus(msg){ $('layerStatus').textContent = msg; }
+function showStatusBanner(msg){ const el=$('statusBanner'); el.textContent=msg; el.classList.remove('hidden'); }
+function hideStatusBanner(){ $('statusBanner').classList.add('hidden'); }
+function timeStamp(){ return new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).toUpperCase(); }
+
+function drawKey(){
+  const box = $('keyBox');
+  box.style.display = $('showKey').checked ? 'block' : 'none';
+  box.style.left = `${$('keyX').value}px`;
+  box.style.top = `${$('keyY').value}px`;
+  box.style.transform = `scale(${$('keyScale').value})`;
+  if (!$('showKey').checked) return;
+  const key = PRODUCTS[currentProductKey].key;
+  box.innerHTML = keyHtml(key);
+}
+
+function getLegend(key){
+  if (!legendConfig[key]) legendConfig[key] = JSON.parse(JSON.stringify(DEFAULT_LEGENDS[key] || {title:'KEY', rows:[]}));
+  return legendConfig[key];
+}
+
+function keyHtml(key){
+  const legend = getLegend(key);
+  return `<div class="legendCard"><div class="legendTitle">${escapeHtml(legend.title || 'KEY')}</div>${legendRows(legend.rows || [])}</div>`;
+}
+
+function legendRows(rows){
+  return (rows || []).map((row, i)=>{
+    const c = Array.isArray(row) ? row[0] : row.color;
+    const t = Array.isArray(row) ? row[1] : row.text;
+    return `<div class="legendRow"><div class="legendSwatch" style="background:${escapeHtml(c || '#ffffff')}"></div><div class="legendText">${escapeHtml(t || '')}</div></div>`;
+  }).join('');
+}
+
+function renderKeyEditor(){
+  const wrap = $('keyEditorRows');
+  if (!wrap) return;
+  const key = PRODUCTS[currentProductKey]?.key || 'radar';
+  const legend = getLegend(key);
+  wrap.innerHTML = (legend.rows || []).map((row, idx) => {
+    const c = Array.isArray(row) ? row[0] : row.color;
+    const t = Array.isArray(row) ? row[1] : row.text;
+    return `<div class="keyEditRow" data-index="${idx}"><input type="color" class="keyRowColor" value="${escapeHtml(c || '#ffffff')}"><input type="text" class="keyRowText" value="${escapeHtml(t || '')}"><button type="button" class="keyRowDelete">×</button></div>`;
+  }).join('') || '<div class="hint">This key has no rows yet.</div>';
+  $$('.keyEditRow', wrap).forEach(rowEl => {
+    const idx = Number(rowEl.dataset.index);
+    rowEl.querySelector('.keyRowColor')?.addEventListener('input', e => { legend.rows[idx][0] = e.target.value; drawKey(); });
+    rowEl.querySelector('.keyRowText')?.addEventListener('input', e => { legend.rows[idx][1] = e.target.value; drawKey(); });
+    rowEl.querySelector('.keyRowDelete')?.addEventListener('click', () => { legend.rows.splice(idx,1); drawKey(); renderKeyEditor(); });
+  });
+}
+
+function addCurrentKeyRow(){
+  const key = PRODUCTS[currentProductKey]?.key || 'radar';
+  const legend = getLegend(key);
+  legend.rows.push(['#ffffff','New item']);
+  drawKey();
+  renderKeyEditor();
+}
+
+function resetCurrentKeyRows(){
+  const key = PRODUCTS[currentProductKey]?.key || 'radar';
+  legendConfig[key] = JSON.parse(JSON.stringify(DEFAULT_LEGENDS[key] || {title:'KEY', rows:[]}));
+  drawKey();
+  renderKeyEditor();
+}
+
+function drawSourceBar(){
+  const bar = $('sourceBar');
+  bar.style.display = $('showSourceBar').checked ? 'block' : 'none';
+  bar.style.left = `${$('sourceX').value}px`;
+  bar.style.top = `${$('sourceY').value}px`;
+  bar.style.width = `${$('sourceW').value}px`;
+  const text = $('sourceText').value || '';
+  bar.textContent = currentLayerSource ? `${text} Current layer: ${currentLayerSource}.` : text;
+}
+
+function parseCityLines(){
+  return $('cityValues').value.split(/\n+/).map(line => {
+    const [name,lat,lon,value] = line.split('|').map(v => (v || '').trim());
+    const la = Number(lat), lo = Number(lon);
+    if (!name || !Number.isFinite(la) || !Number.isFinite(lo)) return null;
+    return {name, lat:la, lon:lo, value:value || '', p:1};
+  }).filter(Boolean);
+}
+
+function getSelectedCities(){
+  const preset = $('cityPreset')?.value || 'custom';
+  const density = Number($('cityDensity')?.value || 3);
+  const showValues = cityValuesShouldDisplayForCurrentLayer();
+  if (preset === 'custom') {
+    return parseCityLines().map(c => ({...c, value: showValues ? (cityValueMap.get(c.name) || c.value || '') : ''}));
+  }
+  const list = CITY_SETS[preset] || CITY_SETS.texasCore || [];
+  return list.filter(c => c.p <= density).map(c => ({...c, value: showValues ? (cityValueMap.get(c.name) || '') : ''}));
+}
+
+function visibleCities(){
+  if (!map) return [];
+  const stage = $('mapStage');
+  return getSelectedCities().filter(c => {
+    const p = map.project([c.lon, c.lat]);
+    return p.x >= -80 && p.y >= -80 && p.x <= stage.clientWidth + 80 && p.y <= stage.clientHeight + 80;
+  });
+}
+
+function applyCityStyle(){
+  const layer = $('cityLayer');
+  if (!layer) return;
+  layer.style.setProperty('--city-text-color', $('cityTextColor')?.value || '#ffffff');
+  layer.style.setProperty('--city-halo-color', $('cityHaloColor')?.value || '#000000');
+  layer.style.setProperty('--city-value-size', `${$('cityValueSize')?.value || 44}px`);
+  layer.style.setProperty('--city-name-size', `${$('cityNameSize')?.value || 16}px`);
+}
+
+function drawCityLabels(){
+  const layer = $('cityLayer');
+  layer.innerHTML = '';
+  applyCityStyle();
+  if (!$('showCities').checked || !map) return;
+  const cities = getSelectedCities();
+  for (const c of cities) {
+    const p = map.project([c.lon, c.lat]);
+    if (p.x < -70 || p.y < -70 || p.x > $('mapStage').clientWidth+70 || p.y > $('mapStage').clientHeight+70) continue;
+    const displayValue = c.value || '';
+    const div = document.createElement('div');
+    div.className = 'cityLabel';
+    div.style.left = `${p.x}px`; div.style.top = `${p.y}px`;
+    div.innerHTML = displayValue ? `<div class="value">${escapeHtml(displayValue)}</div><div class="name">${escapeHtml(c.name)}</div>` : `<div class="name">${escapeHtml(c.name)}</div>`;
+    layer.appendChild(div);
+  }
+}
+
+async function loadPointValues(){
+  const cities = visibleCities().slice(0, 80);
+  const metric = resolveCityValueMetric();
+  const source = resolveCityValueSource(metric);
+  cityValueMap.clear();
+  setLayerStatus(`Loading ${cityMetricLabel(metric)} values from ${sourceLabel(source)} for ${cities.length} visible city labels...`);
+  let loaded = 0;
+  for (const c of cities) {
+    try {
+      const value = await fetchCityDisplayValue(c, metric, source);
+      if (value) { cityValueMap.set(c.name, value); loaded++; }
+      else cityValueMap.delete(c.name);
+    } catch (err) {
+      console.warn('city value failed', c.name, metric, source, err);
+      cityValueMap.delete(c.name);
+    }
+  }
+  pointValuesLoaded = true;
+  drawCityLabels();
+  setLayerStatus(`Loaded ${loaded}/${cities.length} city values for ${cityMetricLabel(metric)} using ${sourceLabel(source)}.`);
+}
+
+function cityValuesShouldDisplayForCurrentLayer(){
+  return ($('cityValueDisplay')?.value || 'always') !== 'off';
+}
+
+function resolveCityValueMetric(){
+  const selected = $('cityValueMetric')?.value || 'auto';
+  if (selected !== 'auto') return selected;
+  const map = {
+    owTemp:'temp', temp:'temp', maxTemp:'temp', minTemp:'temp',
+    owHeat:'feels', heat:'feels',
+    owWind:'wind',
+    owPressure:'pressure',
+    owClouds:'clouds',
+    owPrecip:'precip',
+    humidity:'humidity',
+    radar:'precip',
+    alerts:'temp', spcCat:'temp', spcTor:'temp', spcHail:'temp', spcWind:'wind', wpcChart:'temp'
+  };
+  return map[currentProductKey] || 'temp';
+}
+
+function resolveCityValueSource(metric){
+  const selected = $('cityValueSource')?.value || 'auto';
+  if (selected !== 'auto') return selected;
+  if (PRODUCTS[currentProductKey]?.service === 'openweatherTile') return 'openweather';
+  if (['pressure','clouds'].includes(metric)) return 'openweather';
+  return 'nws';
+}
+
+function sourceLabel(source){ return source === 'openweather' ? 'OpenWeather' : 'NWS'; }
+function cityMetricLabel(metric){
+  return ({temp:'temperature', feels:'feels-like / heat index', wind:'wind speed', pressure:'pressure', clouds:'cloud cover', precip:'precipitation', humidity:'humidity'})[metric] || metric;
+}
+
+async function fetchCityDisplayValue(c, metric, source){
+  if (source === 'openweather') return await fetchOpenWeatherCityValue(c, metric);
+  try { return await fetchNwsCityDisplayValue(c, metric); }
+  catch (err) {
+    if (['pressure','clouds'].includes(metric)) return await fetchOpenWeatherCityValue(c, metric);
+    throw err;
+  }
+}
+
+async function fetchOpenWeatherCityValue(c, metric){
+  const url = `/.netlify/functions/openweather?op=weather&lat=${c.lat.toFixed(5)}&lon=${c.lon.toFixed(5)}`;
+  const data = await fetchJson(url);
+  const main = data.main || {};
+  const wind = data.wind || {};
+  const clouds = data.clouds || {};
+  const rain = data.rain || {};
+  const snow = data.snow || {};
+  if (metric === 'feels') return Number.isFinite(main.feels_like) ? `${Math.round(main.feels_like)}°` : '';
+  if (metric === 'wind') return Number.isFinite(wind.speed) ? `${Math.round(wind.speed)} mph` : '';
+  if (metric === 'pressure') return Number.isFinite(main.pressure) ? `${Math.round(main.pressure)} hPa` : '';
+  if (metric === 'clouds') return Number.isFinite(clouds.all) ? `${Math.round(clouds.all)}%` : '';
+  if (metric === 'precip') {
+    const mm = Number(rain['1h'] ?? rain['3h'] ?? snow['1h'] ?? snow['3h'] ?? 0);
+    const inches = Number.isFinite(mm) ? mm / 25.4 : null;
+    return inches !== null ? `${inches.toFixed(2)}in` : '';
+  }
+  if (metric === 'humidity') return Number.isFinite(main.humidity) ? `${Math.round(main.humidity)}%` : '';
+  return Number.isFinite(main.temp) ? `${Math.round(main.temp)}°` : '';
+}
+
+async function fetchNwsCityDisplayValue(c, metric){
+  const point = await fetchJson(`https://api.weather.gov/points/${c.lat.toFixed(4)},${c.lon.toFixed(4)}`);
+  const props = point.properties || {};
+  if (metric === 'feels') return await fetchNwsGridValue(props, 'apparentTemperature', 'tempF');
+  if (metric === 'humidity') return await fetchNwsGridValue(props, 'relativeHumidity', 'percent');
+  if (metric === 'clouds') return await fetchNwsGridValue(props, 'skyCover', 'percent');
+  if (metric === 'precip') return await fetchNwsGridValue(props, 'probabilityOfPrecipitation', 'percent');
+  if (metric === 'pressure') return await fetchOpenWeatherCityValue(c, 'pressure');
+  if (metric === 'wind') {
+    if (!props.forecastHourly) throw new Error('No hourly forecast URL');
+    const hourly = await fetchJson(props.forecastHourly);
+    const p0 = hourly.properties?.periods?.[0] || {};
+    const s = String(p0.windSpeed || '').match(/\d+/)?.[0];
+    return s ? `${s} mph` : '';
+  }
+  if (currentProductKey === 'maxTemp' || currentProductKey === 'minTemp') {
+    if (!props.forecast) throw new Error('No point forecast URL');
+    const forecast = await fetchJson(props.forecast);
+    const periods = forecast.properties?.periods || [];
+    const period = currentProductKey === 'maxTemp'
+      ? periods.find(p => p.isDaytime !== false)
+      : periods.find(p => p.isDaytime === false);
+    const temp = period?.temperature;
+    return Number.isFinite(temp) ? `${Math.round(temp)}°` : '';
+  }
+  if (!props.forecastHourly) throw new Error('No hourly forecast URL');
+  const hourly = await fetchJson(props.forecastHourly);
+  const temp = hourly.properties?.periods?.[0]?.temperature;
+  return Number.isFinite(temp) ? `${Math.round(temp)}°` : '';
+}
+
+async function fetchNwsGridValue(props, field, unit){
+  if (!props.forecastGridData) throw new Error('No grid data URL');
+  const grid = await fetchJson(props.forecastGridData);
+  const values = grid.properties?.[field]?.values || [];
+  const first = values.find(v => v.value !== null && v.value !== undefined);
+  if (!first) return '';
+  const raw = Number(first.value);
+  if (!Number.isFinite(raw)) return '';
+  if (unit === 'tempF') return `${Math.round(cToF(raw))}°`;
+  if (unit === 'percent') return `${Math.round(raw)}%`;
+  return String(Math.round(raw));
+}
+
+function cToF(c){ return (Number(c) * 9/5) + 32; }
+
+
+async function fetchJson(url){
+  const res = await fetch(url, {headers:{Accept:'application/json, application/geo+json'}});
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function exportPng(){
+  if (!map) return;
+  const cover = $('exportCover');
+  document.body.classList.add('exporting');
+  cover.style.display = 'flex';
+  $('exportStatus').textContent = 'Rendering manual 1920×1080 PNG...';
+  try {
+    await waitForMapIdle();
+    const canvas = normalizeExportCanvas(await manualExportCanvas(), 1920, 1080);
+    await downloadCanvas(canvas, `RBRTW-real-map-2-2-8-${slug(PRODUCTS[currentProductKey].title)}-${new Date().toISOString().slice(0,10)}.png`);
+    $('exportStatus').textContent = 'PNG exported.';
+  } catch (err) {
+    console.error(err);
+    $('exportStatus').textContent = `Export failed: ${err.message}`;
+    setLayerStatus(`Export failed: ${err.message}`);
+  } finally {
+    document.body.classList.remove('exporting');
+    cover.style.display = '';
+  }
+}
+
+async function manualExportCanvas(){
+  const canvas = document.createElement('canvas');
+  canvas.width = 1920; canvas.height = 1080;
+  const ctx = canvas.getContext('2d');
+  drawExportBackground(ctx);
+  drawHeader(ctx);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(26,134,1868,902);
+  ctx.clip();
+  try {
+    if (['radarTile','wmsTile'].includes(PRODUCTS[currentProductKey]?.service)) {
+      await drawFallbackBasemapAndRadar(ctx, 26, 134, 1868, 902);
+    } else {
+      const mapCanvas = map.getCanvas();
+      const mapImg = await loadImage(mapCanvas.toDataURL('image/png'));
+      ctx.drawImage(mapImg,26,134,1868,902);
+    }
+  } catch (err) {
+    ctx.fillStyle = '#061020';
+    ctx.fillRect(26,134,1868,902);
+    try {
+      await drawFallbackBasemapAndRadar(ctx, 26, 134, 1868, 902);
+    } catch (fallbackErr) {
+      console.warn('Fallback basemap/radar export failed', fallbackErr);
+    }
+  }
+  ctx.restore();
+  drawMapFrame(ctx);
+  if ($('showKey').checked) drawKeyToCanvas(ctx);
+  if ($('showCities').checked) drawCitiesToCanvas(ctx);
+  if ($('showSourceBar').checked) drawSourceToCanvas(ctx);
+  drawOverlaysToCanvas(ctx);
+  drawFooter(ctx);
+  return canvas;
+}
+
+
+function normalizeExportCanvas(canvas, width, height){
+  if (canvas.width === width && canvas.height === height) return canvas;
+  const out = document.createElement('canvas');
+  out.width = width; out.height = height;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(canvas, 0, 0, width, height);
+  return out;
+}
+
+function assertCanvasExportable(canvas){
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob(blob => blob ? resolve() : reject(new Error('Canvas export test failed')), 'image/png');
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function withTimeout(promise, ms, label){
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label || 'Operation timed out')), ms);
+    promise.then(v => { clearTimeout(timer); resolve(v); }, e => { clearTimeout(timer); reject(e); });
+  });
+}
+
+function drawExportBackground(ctx){
+  const g = ctx.createLinearGradient(0,0,1920,1080); g.addColorStop(0,'#061020'); g.addColorStop(.45,'#0b1d3b'); g.addColorStop(1,'#230d45'); ctx.fillStyle=g; ctx.fillRect(0,0,1920,1080);
+}
+function drawHeader(ctx){
+  const g = ctx.createLinearGradient(0,0,1920,0); g.addColorStop(0,'#020814'); g.addColorStop(.35,'#105bff'); g.addColorStop(.75,'#6f2cff'); g.addColorStop(1,'#020814'); ctx.fillStyle=g; ctx.fillRect(0,0,1920,134); ctx.fillStyle='rgba(255,255,255,.96)'; ctx.fillRect(0,127,1920,7);
+  roundRect(ctx,32,18,186,86,17, gradient(ctx,32,18,218,104, ['#105bff','#6f2cff','#cf2cff']));
+  text(ctx,'RBRTW',125,62,36,'center','white',1000); text(ctx,'AUTO WEATHER STUDIO',125,84,11,'center','#e8eeff',1000);
+  shadow(ctx,true); text(ctx,$('productTitle').value,252,80,72,'left','white',1000); shadow(ctx,false);
+  text(ctx,($('locationLabel').value||'').toUpperCase(),1865,50,23,'right','white',1000); text(ctx,$('loadedOut').textContent||'',1865,77,15,'right','#bad5ff',1000);
+}
+function drawMapFrame(ctx){ ctx.strokeStyle='rgba(255,255,255,.9)'; ctx.lineWidth=4; ctx.strokeRect(26,134,1868,902); }
+function drawFooter(ctx){ ctx.fillStyle='rgba(2,7,15,.94)'; ctx.fillRect(0,1036,1920,44); ctx.fillStyle='rgba(255,255,255,.76)'; ctx.fillRect(0,1036,1920,4);   }
+
+function drawKeyToCanvas(ctx){
+  const key = PRODUCTS[currentProductKey].key;
+  const legend = getLegend(key);
+  const x=Number($('keyX').value)+26, y=Number($('keyY').value)+134, s=Number($('keyScale').value);
+  const rows = legend.rows || [];
+  const h = Math.max(70, 42 + rows.length * 26 + 8);
+  ctx.save(); ctx.translate(x,y); ctx.scale(s,s);
+  ctx.fillStyle='rgba(2,8,20,.86)'; ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.lineWidth=3; ctx.fillRect(0,0,260,h); ctx.strokeRect(0,0,260,h);
+  text(ctx,legend.title || 'KEY',10,26,18,'left','white',1000);
+  let yy=42;
+  for (const [c,t] of rows){
+    ctx.fillStyle=c || '#ffffff'; ctx.fillRect(10,yy,46,24);
+    ctx.fillStyle='rgba(255,255,255,.90)'; ctx.fillRect(56,yy,190,24);
+    text(ctx,t || '',66,yy+17,15,'left','#061020',1000);
+    yy+=26;
+  }
+  ctx.restore();
+}
+function drawCitiesToCanvas(ctx){
+  const color = $('cityTextColor')?.value || '#ffffff';
+  const halo = $('cityHaloColor')?.value || '#000000';
+  const valueSize = Number($('cityValueSize')?.value || 44);
+  const nameSize = Number($('cityNameSize')?.value || 16);
+  for (const c of getSelectedCities()){
+    const p = map.project([c.lon,c.lat]); const x=26+p.x, y=134+p.y; if(x<0||x>1920||y<120||y>1036) continue;
+    cityShadow(ctx, halo); const displayValue = c.value || '';
+    if(displayValue) text(ctx,displayValue,x,y-5,valueSize,'center',color,1000);
+    text(ctx,c.name,x,y+Math.round(nameSize*1.4),nameSize,'center',color,1000); shadow(ctx,false);
+  }
+}
+function drawSourceToCanvas(ctx){
+  const x=26+Number($('sourceX').value), y=134+Number($('sourceY').value), w=Number($('sourceW').value); const msg=$('sourceBar').textContent;
+  ctx.fillStyle='rgba(0,0,0,.72)'; roundPath(ctx,x,y,w,34,6); ctx.fill(); ctx.fillStyle='#89e9ff'; ctx.fillRect(x,y,7,34); text(ctx,msg,x+18,y+23,18,'left','white',900);
+}
+
+
+async function drawFallbackBasemapAndRadar(ctx, x, y, w, h){
+  const bbox = getCurrentBbox();
+  const z = Math.max(3, Math.min(12, Math.round(map.getZoom() || 7)));
+  await drawWebMercatorTileTemplate(ctx, EXPORT_BASEMAP_TILE_TEMPLATE, bbox, z, x, y, w, h, 1);
+  const p = PRODUCTS[currentProductKey];
+  if (p?.service === 'radarTile') {
+    await drawWebMercatorTileTemplate(ctx, IEM_RADAR_TILE_TEMPLATE, bbox, z, x, y, w, h, Number($('layerOpacity').value || 0.72));
+  }
+  if (p?.service === 'wmsTile') {
+    await drawWebMercatorRadarWmsTiles(ctx, bbox, z, x, y, w, h, Number($('layerOpacity').value || 0.72), p.wmsSource || 'nowcoast');
+  }
+}
+
+const EXPORT_BASEMAP_TILE_TEMPLATE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+const IEM_RADAR_TILE_TEMPLATE = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0r-900913/{z}/{x}/{y}.png';
+
+function tileProxyUrl(url){
+  return `/.netlify/functions/noaa-map?op=proxyImage&url=${encodeURIComponent(url)}`;
+}
+
+function lonLatToWorldPixel(lon, lat, z){
+  const sin = Math.sin(lat * Math.PI / 180);
+  const scale = 256 * Math.pow(2, z);
+  const x = (lon + 180) / 360 * scale;
+  const y = (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale;
+  return {x, y};
+}
+
+
+function tileMercatorBbox(tx, ty, z){
+  const max = 20037508.342789244;
+  const tiles = Math.pow(2, z);
+  const tileSize = (2 * max) / tiles;
+  const w = -max + tx * tileSize;
+  const e = -max + (tx + 1) * tileSize;
+  const n = max - ty * tileSize;
+  const s = max - (ty + 1) * tileSize;
+  return [w,s,e,n].map(v => v.toFixed(3)).join(',');
+}
+
+async function drawWebMercatorRadarWmsTiles(ctx, bbox, z, dx, dy, dw, dh, opacity=1, source='nowcoast'){
+  const [west, south, east, north] = bbox;
+  const nw = lonLatToWorldPixel(west, north, z);
+  const se = lonLatToWorldPixel(east, south, z);
+  const startX = Math.floor(nw.x / 256), endX = Math.floor(se.x / 256);
+  const startY = Math.floor(nw.y / 256), endY = Math.floor(se.y / 256);
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = opacity;
+  const jobs = [];
+  for (let tx = startX; tx <= endX; tx++) {
+    for (let ty = startY; ty <= endY; ty++) {
+      const maxTile = Math.pow(2, z);
+      if (ty < 0 || ty >= maxTile) continue;
+      const wrappedX = ((tx % maxTile) + maxTile) % maxTile;
+      const mb = tileMercatorBbox(wrappedX, ty, z);
+      const url = `/.netlify/functions/noaa-map?op=wmsRadarTile&source=${encodeURIComponent(source)}&bbox=${encodeURIComponent(mb)}`;
+      const px = dx + ((tx * 256 - nw.x) / (se.x - nw.x)) * dw;
+      const py = dy + ((ty * 256 - nw.y) / (se.y - nw.y)) * dh;
+      const pw = (256 / (se.x - nw.x)) * dw;
+      const ph = (256 / (se.y - nw.y)) * dh;
+      jobs.push(loadImage(url).then(img => ctx.drawImage(img, px, py, pw + 1, ph + 1)).catch(() => null));
+    }
+  }
+  await Promise.all(jobs);
+  ctx.globalAlpha = prevAlpha;
+}
+
+async function drawWebMercatorTileTemplate(ctx, template, bbox, z, dx, dy, dw, dh, opacity=1){
+  const [west, south, east, north] = bbox;
+  const nw = lonLatToWorldPixel(west, north, z);
+  const se = lonLatToWorldPixel(east, south, z);
+  const startX = Math.floor(nw.x / 256), endX = Math.floor(se.x / 256);
+  const startY = Math.floor(nw.y / 256), endY = Math.floor(se.y / 256);
+  const worldSize = 256 * Math.pow(2, z);
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = opacity;
+  const jobs = [];
+  for (let tx = startX; tx <= endX; tx++) {
+    for (let ty = startY; ty <= endY; ty++) {
+      const maxTile = Math.pow(2, z);
+      if (ty < 0 || ty >= maxTile) continue;
+      const wrappedX = ((tx % maxTile) + maxTile) % maxTile;
+      const url = template.replace('{z}', z).replace('{x}', wrappedX).replace('{y}', ty);
+      const px = dx + ((tx * 256 - nw.x) / (se.x - nw.x)) * dw;
+      const py = dy + ((ty * 256 - nw.y) / (se.y - nw.y)) * dh;
+      const pw = (256 / (se.x - nw.x)) * dw;
+      const ph = (256 / (se.y - nw.y)) * dh;
+      jobs.push(loadImage(tileProxyUrl(url)).then(img => ctx.drawImage(img, px, py, pw + 1, ph + 1)).catch(() => null));
+    }
+  }
+  await Promise.all(jobs);
+  ctx.globalAlpha = prevAlpha;
+}
+
+function waitForMapIdle(){ return new Promise(resolve => { let done=false; const finish=()=>{ if(done) return; done=true; setTimeout(resolve,250); }; if (map && map.loaded && map.loaded()) return finish(); const timer=setTimeout(finish,2500); try { map.once('idle', () => { clearTimeout(timer); finish(); }); } catch(err) { clearTimeout(timer); finish(); } }); }
+function cityShadow(ctx, color){ ctx.shadowColor=color || 'rgba(0,0,0,.85)'; ctx.shadowBlur=8; ctx.shadowOffsetY=3; }
+function loadImage(src){ return new Promise((resolve,reject)=>{ const img=new Image(); img.onload=()=>resolve(img); img.onerror=()=>reject(new Error('Could not read map canvas image. Cross-origin tiles may be blocking export.')); img.src=src; }); }
+function downloadCanvas(canvas, filename){ return new Promise((resolve,reject)=>{ canvas.toBlob(blob=>{ if(!blob) return reject(new Error('Could not create PNG blob.')); const a=document.createElement('a'); const url=URL.createObjectURL(blob); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>{URL.revokeObjectURL(url); resolve();},250); },'image/png'); }); }
+function text(ctx,str,x,y,size,align,color,weight=900){ ctx.font=`${weight} ${size}px Arial, Helvetica, sans-serif`; ctx.textAlign=align; ctx.textBaseline='alphabetic'; ctx.fillStyle=color; ctx.fillText(String(str||''),x,y); }
+function shadow(ctx,on){ if(on){ctx.shadowColor='rgba(0,0,0,.75)';ctx.shadowBlur=8;ctx.shadowOffsetY=4;}else{ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;} }
+function gradient(ctx,x1,y1,x2,y2,colors){ const g=ctx.createLinearGradient(x1,y1,x2,y2); colors.forEach((c,i)=>g.addColorStop(i/(colors.length-1),c)); return g; }
+function roundRect(ctx,x,y,w,h,r,fill){ ctx.fillStyle=fill; roundPath(ctx,x,y,w,h,r); ctx.fill(); }
+function roundPath(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+
+function addMapOverlay(opts={}){
+  const overlay = Object.assign({
+    id:`ov-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    text:'WEATHER NOTE', x:260, y:180, w:340, h:90, fontSize:34,
+    textColor:'#ffffff', boxColor:'#061020', boxOpacity:.78, box:true
+  }, opts || {});
+  mapOverlays.push(overlay);
+  selectedOverlayId = overlay.id;
+  renderMapOverlays();
+  renderOverlayEditor();
+}
+
+function renderMapOverlays(){
+  const layer = $('mapOverlayLayer');
+  if (!layer) return;
+  layer.innerHTML = mapOverlays.map(o => overlayHtml(o)).join('');
+  $$('.mapOverlayItem', layer).forEach(el => {
+    const overlay = mapOverlays.find(o => o.id === el.dataset.id);
+    el.addEventListener('mousedown', e => startOverlayMove(e, overlay));
+    el.addEventListener('click', e => { e.stopPropagation(); selectedOverlayId = overlay.id; renderMapOverlays(); renderOverlayEditor(); });
+  });
+  $$('.resizeHandle', layer).forEach(handle => {
+    handle.addEventListener('mousedown', e => startOverlayResize(e, mapOverlays.find(o => o.id === handle.closest('.mapOverlayItem').dataset.id), handle.dataset.handle));
+  });
+}
+
+function overlayHtml(o){
+  const selected = o.id === selectedOverlayId ? ' selectedOverlay' : '';
+  const noBox = o.box === false ? ' noBox' : '';
+  const bg = o.box === false ? 'transparent' : hexToRgba(o.boxColor || '#061020', Number(o.boxOpacity ?? .78));
+  const border = o.box === false ? 'transparent' : 'rgba(255,255,255,.50)';
+  const handles = o.id === selectedOverlayId ? ['nw','n','ne','e','se','s','sw','w'].map(h => `<span class="resizeHandle ${h}" data-handle="${h}"></span>`).join('') : '';
+  return `<div class="mapOverlayItem${selected}${noBox}" data-id="${escapeHtml(o.id)}" style="left:${o.x}px;top:${o.y}px;width:${o.w}px;height:${o.h}px;font-size:${o.fontSize}px;color:${escapeHtml(o.textColor || '#ffffff')};background:${bg};border-color:${border};">${escapeHtml(o.text)}${handles}</div>`;
+}
+
+function startOverlayMove(e, overlay){
+  if (!overlay || e.target.classList.contains('resizeHandle')) return;
+  e.preventDefault(); e.stopPropagation(); selectedOverlayId = overlay.id;
+  const scale = currentStageScale();
+  const startX=e.clientX, startY=e.clientY, ox=overlay.x, oy=overlay.y;
+  function move(ev){ overlay.x = clamp(Math.round(ox + (ev.clientX-startX)/scale), -50, $('mapStage').clientWidth-30); overlay.y = clamp(Math.round(oy + (ev.clientY-startY)/scale), -50, $('mapStage').clientHeight-30); renderMapOverlays(); renderOverlayEditor(false); }
+  function up(){ document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); renderMapOverlays(); renderOverlayEditor(); }
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up); renderMapOverlays(); renderOverlayEditor();
+}
+
+function startOverlayResize(e, overlay, handle){
+  if (!overlay) return;
+  e.preventDefault(); e.stopPropagation(); selectedOverlayId = overlay.id;
+  const scale=currentStageScale(); const sx=e.clientX, sy=e.clientY; const ox=overlay.x, oy=overlay.y, ow=overlay.w, oh=overlay.h;
+  function move(ev){
+    const dx=(ev.clientX-sx)/scale, dy=(ev.clientY-sy)/scale;
+    let x=ox,y=oy,w=ow,h=oh;
+    if (handle.includes('e')) w=ow+dx;
+    if (handle.includes('s')) h=oh+dy;
+    if (handle.includes('w')) { x=ox+dx; w=ow-dx; }
+    if (handle.includes('n')) { y=oy+dy; h=oh-dy; }
+    overlay.x=Math.round(x); overlay.y=Math.round(y); overlay.w=Math.max(36,Math.round(w)); overlay.h=Math.max(30,Math.round(h));
+    renderMapOverlays(); renderOverlayEditor(false);
+  }
+  function up(){ document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); renderMapOverlays(); renderOverlayEditor(); }
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+}
+
+function renderOverlayEditor(rebuild=true){
+  const el = $('overlayEditor'); if (!el) return;
+  const o = mapOverlays.find(x => x.id === selectedOverlayId);
+  if (!o) { el.innerHTML = 'Click an added text box or symbol to edit it.'; return; }
+  if (!rebuild && document.activeElement && el.contains(document.activeElement)) return;
+  el.innerHTML = `
+    <label>Text / symbol<textarea id="overlayTextInput" rows="2">${escapeHtml(o.text)}</textarea></label>
+    <div class="miniRow"><label>X<input id="overlayX" type="number" value="${o.x}"></label><label>Y<input id="overlayY" type="number" value="${o.y}"></label></div>
+    <div class="miniRow"><label>Width<input id="overlayW" type="number" value="${o.w}"></label><label>Height<input id="overlayH" type="number" value="${o.h}"></label></div>
+    <label>Font size<input id="overlayFontSize" type="range" min="14" max="110" step="1" value="${o.fontSize}"></label>
+    <div class="miniRow"><label>Text color<input id="overlayTextColor" type="color" value="${o.textColor || '#ffffff'}"></label><label>Box color<input id="overlayBoxColor" type="color" value="${o.boxColor || '#061020'}"></label></div>
+    <label>Box opacity<input id="overlayBoxOpacity" type="range" min="0" max="1" step="0.05" value="${o.boxOpacity ?? .78}"></label>
+    <label class="checkRow"><input id="overlayNoBox" type="checkbox" ${o.box === false ? 'checked':''}><span>Text only / no box</span></label>
+    <div class="inlineBtns"><button id="duplicateOverlay" class="secondary">Duplicate</button><button id="deleteOverlay" class="secondary">Delete</button></div>`;
+  const update = () => {
+    o.text = $('overlayTextInput').value;
+    o.x = Math.round(Number($('overlayX').value) || o.x);
+    o.y = Math.round(Number($('overlayY').value) || o.y);
+    o.w = Math.max(36, Math.round(Number($('overlayW').value) || o.w));
+    o.h = Math.max(30, Math.round(Number($('overlayH').value) || o.h));
+    o.fontSize = Math.round(Number($('overlayFontSize').value) || o.fontSize);
+    o.textColor = $('overlayTextColor').value;
+    o.boxColor = $('overlayBoxColor').value;
+    o.boxOpacity = Number($('overlayBoxOpacity').value);
+    o.box = !$('overlayNoBox').checked;
+    renderMapOverlays();
+  };
+  ['overlayTextInput','overlayX','overlayY','overlayW','overlayH','overlayFontSize','overlayTextColor','overlayBoxColor','overlayBoxOpacity','overlayNoBox'].forEach(id => $(id)?.addEventListener('input', update));
+  $('overlayNoBox')?.addEventListener('change', update);
+  $('deleteOverlay')?.addEventListener('click', () => { mapOverlays = mapOverlays.filter(x => x.id !== selectedOverlayId); selectedOverlayId = null; renderMapOverlays(); renderOverlayEditor(); });
+  $('duplicateOverlay')?.addEventListener('click', () => { const c = JSON.parse(JSON.stringify(o)); c.id=`ov-${Date.now()}-${Math.random().toString(16).slice(2)}`; c.x+=30; c.y+=30; mapOverlays.push(c); selectedOverlayId=c.id; renderMapOverlays(); renderOverlayEditor(); });
+}
+
+function drawOverlaysToCanvas(ctx){
+  for (const o of mapOverlays){
+    const x=26+o.x, y=134+o.y;
+    ctx.save();
+    if (o.box !== false){
+      ctx.fillStyle = hexToRgba(o.boxColor || '#061020', Number(o.boxOpacity ?? .78));
+      roundPath(ctx,x,y,o.w,o.h,8); ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.50)'; ctx.lineWidth=2; ctx.stroke();
+    }
+    shadow(ctx,true);
+    ctx.fillStyle = o.textColor || '#ffffff';
+    ctx.font = `1000 ${o.fontSize}px Arial, Helvetica, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const lines = String(o.text || '').split(/\n/);
+    const lineH = o.fontSize * 1.08;
+    const start = y + o.h/2 - ((lines.length-1)*lineH)/2;
+    lines.forEach((line,i) => ctx.fillText(line, x+o.w/2, start + i*lineH));
+    shadow(ctx,false);
+    ctx.restore();
+  }
+}
+
+function currentStageScale(){ return Number($('slideFrame')?.dataset.scale || 1); }
+function hexToRgba(hex, alpha){
+  const h = String(hex || '#000000').replace('#','');
+  const full = h.length === 3 ? h.split('').map(c => c+c).join('') : h.padEnd(6,'0').slice(0,6);
+  const n = parseInt(full,16);
+  const r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+  return `rgba(${r},${g},${b},${Math.max(0,Math.min(1,Number(alpha)))})`;
+}
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+function showStatus(message){ setLayerStatus(message); }
+
+function fitStage(){ const vp=$('stageViewport'), fr=$('slideFrame'); const s=Math.min((vp.clientWidth-36)/1920,(vp.clientHeight-36)/1080,1); fr.style.transform=`translate(-50%,-50%) scale(${s})`; fr.dataset.scale=s; }
+function slug(s){ return String(s||'map').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,''); }
+function escapeHtml(v){ return String(v??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+init();
